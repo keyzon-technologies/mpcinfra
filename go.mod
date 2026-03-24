@@ -1,6 +1,6 @@
 module github.com/keyzon-technologies/mpcinfra
 
-go 1.25.8
+go 1.26.1
 
 require (
 	filippo.io/age v1.3.1
@@ -13,7 +13,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.33.5
-	github.com/keyzon-technologies/kryptology v1.0.0
+	github.com/keyzon-technologies/kryptology v1.0.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/nats-io/nats.go v1.49.0
 	github.com/rs/zerolog v1.34.0

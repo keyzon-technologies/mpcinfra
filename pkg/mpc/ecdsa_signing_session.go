@@ -284,6 +284,7 @@ func (s *ecdsaSigningSession) finishSign() {
 		TxID:                s.txID,
 		R:                   sig.R.Bytes(),
 		S:                   sig.S.Bytes(),
+		SignatureRecovery:   []byte{byte(sig.V)},
 	}
 	b, err := json.Marshal(r)
 	if err != nil {

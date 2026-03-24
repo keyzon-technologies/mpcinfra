@@ -77,9 +77,11 @@ type ecdsaKeygenSession struct {
 	// DKLS19 pair setup state (phase 2 — started after FROST finishes)
 	aliceIterators map[string]*dklsv2.AliceDkg // pairKey → iterator (self is Alice)
 	bobIterators   map[string]*dklsv2.BobDkg   // pairKey → iterator (self is Bob)
-	pairsMu        sync.Mutex
-	pairsComplete  map[string]bool // marks which pairs have finished
-	persistOnce    sync.Once       // ensure persistAndFinish runs exactly once
+	pairsMu          sync.Mutex
+	pairMutexes      map[string]*sync.Mutex  // one mutex per pair key
+	pairsComplete    map[string]bool          // marks which pairs have finished
+	persistOnce      sync.Once               // ensure persistAndFinish runs exactly once
+	pairSetupStarted atomic.Bool             // guards startPairSetupPhase from being called twice
 
 	curve *curves.Curve
 }
@@ -129,6 +131,7 @@ func newECDSAKeygenSession(
 		frostR2Bcasts:  make(map[uint32]*frostdkg.Round2Bcast),
 		aliceIterators: make(map[string]*dklsv2.AliceDkg),
 		bobIterators:   make(map[string]*dklsv2.BobDkg),
+		pairMutexes:    make(map[string]*sync.Mutex),
 		pairsComplete:  make(map[string]bool),
 		curve:          curves.K256(),
 	}
@@ -301,7 +304,7 @@ func (s *ecdsaKeygenSession) handleFrostMsg(msg *types.MpcMsg) {
 		s.frostR2Bcasts[fromPID] = bcast
 		ready := len(s.frostR2Bcasts) == len(s.session.peerIDs)
 		s.frostMu.Unlock()
-		if ready {
+		if ready && s.pairSetupStarted.CompareAndSwap(false, true) {
 			go s.startPairSetupPhase()
 		}
 	}
@@ -367,7 +370,7 @@ func (s *ecdsaKeygenSession) runFrostRound2() {
 		Payload:    r2Bytes,
 	})
 
-	if ready {
+	if ready && s.pairSetupStarted.CompareAndSwap(false, true) {
 		go s.startPairSetupPhase()
 	}
 }
@@ -423,6 +426,7 @@ func (s *ecdsaKeygenSession) startPairSetupPhase() {
 
 			weightedShare := lCoeff.Mul(selfSkShare)
 
+			s.pairMutexes[key] = &sync.Mutex{}
 			if selfID == alicePID {
 				alice := dklsv2.NewAliceDkgWithSecret(s.curve, weightedShare, 1)
 				s.aliceIterators[key] = alice
@@ -446,6 +450,10 @@ func (s *ecdsaKeygenSession) sendDklsIteratorMsg(
 	input *protocol.Message,
 	toNodeID string,
 ) {
+	if mu, ok := s.pairMutexes[key]; ok {
+		mu.Lock()
+		defer mu.Unlock()
+	}
 	reply, err := iter.Next(input)
 	if err != nil {
 		s.sendErr(fmt.Errorf("DKLS pair setup %s: Next: %w", key, err))

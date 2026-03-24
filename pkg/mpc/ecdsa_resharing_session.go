@@ -53,6 +53,7 @@ type ecdsaReshareSession struct {
 	aliceIterators map[string]*dklsv2.AliceRefresh // pairKey → Alice iterator
 	bobIterators   map[string]*dklsv2.BobRefresh   // pairKey → Bob iterator
 	pairsMu        sync.Mutex
+	pairMutexes    map[string]*sync.Mutex
 	pairsComplete  map[string]bool
 	persistOnce    sync.Once
 	pairsStarted   atomic.Bool
@@ -117,6 +118,7 @@ func NewECDSAReshareSession(
 		isNewPeer:      isNewPeer,
 		aliceIterators: make(map[string]*dklsv2.AliceRefresh),
 		bobIterators:   make(map[string]*dklsv2.BobRefresh),
+		pairMutexes:    make(map[string]*sync.Mutex),
 		pairsComplete:  make(map[string]bool),
 		curve:          curves.K256(),
 	}
@@ -173,6 +175,7 @@ func (s *ecdsaReshareSession) Init() error {
 				if err := json.Unmarshal(pairData.AliceMsg, &dkgResult); err != nil {
 					return fmt.Errorf("ECDSA reshare: unmarshal Alice DKG result: %w", err)
 				}
+				s.pairMutexes[key] = &sync.Mutex{}
 				iter, err := dklsv2.NewAliceRefresh(s.curve, &dkgResult, 1)
 				if err != nil {
 					return fmt.Errorf("ECDSA reshare: NewAliceRefresh for %s: %w", key, err)
@@ -186,6 +189,7 @@ func (s *ecdsaReshareSession) Init() error {
 				if err := json.Unmarshal(pairData.BobMsg, &dkgResult); err != nil {
 					return fmt.Errorf("ECDSA reshare: unmarshal Bob DKG result: %w", err)
 				}
+				s.pairMutexes[key] = &sync.Mutex{}
 				iter, err := dklsv2.NewBobRefresh(s.curve, &dkgResult, 1)
 				if err != nil {
 					return fmt.Errorf("ECDSA reshare: NewBobRefresh for %s: %w", key, err)
@@ -219,8 +223,6 @@ func (s *ecdsaReshareSession) Reshare(done func()) {
 	}
 	// Alice initiates each refresh.
 	for key, alice := range s.aliceIterators {
-		pairAlice := key[:len(key)/2] // approximate — compute properly below
-		_ = pairAlice
 		parts := splitPairKey(key)
 		go s.sendRefreshIteratorMsg(key, parts[0], parts[1], alice, nil, parts[1])
 	}
@@ -244,6 +246,10 @@ func (s *ecdsaReshareSession) sendRefreshIteratorMsg(
 	input *protocol.Message,
 	toNodeID string,
 ) {
+	if mu, ok := s.pairMutexes[key]; ok {
+		mu.Lock()
+		defer mu.Unlock()
+	}
 	reply, err := iter.Next(input)
 	if err != nil {
 		s.sendErr(fmt.Errorf("ECDSA reshare pair %s: Next: %w", key, err))
