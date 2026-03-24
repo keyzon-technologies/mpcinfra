@@ -1,0 +1,657 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/hashicorp/consul/api"
+	"github.com/keyzon-technologies/mpcinfra/pkg/config"
+	"github.com/keyzon-technologies/mpcinfra/pkg/constant"
+	"github.com/keyzon-technologies/mpcinfra/pkg/event"
+	"github.com/keyzon-technologies/mpcinfra/pkg/eventconsumer"
+	"github.com/keyzon-technologies/mpcinfra/pkg/healthcheck"
+	"github.com/keyzon-technologies/mpcinfra/pkg/identity"
+	"github.com/keyzon-technologies/mpcinfra/pkg/infra"
+	"github.com/keyzon-technologies/mpcinfra/pkg/keyinfo"
+	"github.com/keyzon-technologies/mpcinfra/pkg/kvstore"
+	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
+	"github.com/keyzon-technologies/mpcinfra/pkg/messaging"
+	"github.com/keyzon-technologies/mpcinfra/pkg/mpc"
+	"github.com/keyzon-technologies/mpcinfra/pkg/security"
+	"github.com/nats-io/nats.go"
+	"github.com/spf13/viper"
+	"github.com/urfave/cli/v3"
+	"golang.org/x/term"
+)
+
+const (
+	Version                    = "0.3.3"
+	DefaultBackupPeriodSeconds = 300 // (5 minutes)
+)
+
+func printBanner() {
+	banner := fmt.Sprintf(`
+╔══════════════════════════════════════════════════════════════╗
+║                       mpcinfra v%s                          ║
+║      Multi-Party Computation Threshold Signatures Node       ║
+╚══════════════════════════════════════════════════════════════╝
+`, Version)
+	fmt.Print(banner)
+}
+
+func main() {
+	app := &cli.Command{
+		Name:    "mpcinfra",
+		Usage:   "Multi-Party Computation node for threshold signatures",
+		Version: Version,
+		Commands: []*cli.Command{
+			{
+				Name:  "start",
+				Usage: "Start an mpcinfra node",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "name",
+						Aliases:  []string{"n"},
+						Usage:    "Node name",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "config",
+						Aliases: []string{"c"},
+						Usage:   "Path to configuration file",
+					},
+					&cli.BoolFlag{
+						Name:    "decrypt-private-key",
+						Aliases: []string{"d"},
+						Value:   false,
+						Usage:   "Decrypt node private key",
+					},
+					&cli.BoolFlag{
+						Name:    "prompt-credentials",
+						Aliases: []string{"p"},
+						Usage:   "Prompt for sensitive parameters",
+					},
+					&cli.StringFlag{
+						Name:    "password-file",
+						Aliases: []string{"f"},
+						Usage:   "Path to file containing BadgerDB password",
+					},
+					&cli.StringFlag{
+						Name:    "identity-password-file",
+						Aliases: []string{"k"},
+						Usage:   "Path to file containing password for decrypting .age encrypted node private key",
+					},
+					&cli.StringFlag{
+						Name:  "peers",
+						Usage: "Path to peers.json file (syncs new peers to Consul on startup)",
+					},
+					&cli.BoolFlag{
+						Name:  "debug",
+						Usage: "Enable debug logging",
+						Value: false,
+					},
+				},
+				Action: runNode,
+			},
+			{
+				Name:  "version",
+				Usage: "Display detailed version information",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					fmt.Printf("mpcinfra version %s\n", Version)
+					return nil
+				},
+			},
+		},
+	}
+
+	if err := app.Run(context.Background(), os.Args); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func runNode(ctx context.Context, c *cli.Command) error {
+	nodeName := c.String("name")
+	configPath := c.String("config")
+	decryptPrivateKey := c.Bool("decrypt-private-key")
+	usePrompts := c.Bool("prompt-credentials")
+	passwordFile := c.String("password-file")
+	agePasswordFile := c.String("identity-password-file")
+	debug := c.Bool("debug")
+
+	viper.SetDefault("backup_enabled", true)
+	config.InitViperConfig(configPath)
+	environment := viper.GetString("environment")
+	logger.Init(environment, debug)
+
+	// Print ASCII banner
+	printBanner()
+
+	// Handle password file if provided
+	if passwordFile != "" {
+		if err := loadPasswordFromFile(passwordFile); err != nil {
+			return fmt.Errorf("failed to load password from file: %w", err)
+		}
+	}
+	// Handle configuration based on prompt flag
+	if usePrompts {
+		promptForSensitiveCredentials()
+	}
+	appConfig := config.LoadConfig()
+	// Validate the config values
+	checkRequiredConfigValues(appConfig)
+
+	consulClient := infra.GetConsulClient(environment)
+	keyinfoStore := keyinfo.NewStore(consulClient.KV())
+
+	// If --peers flag is provided, sync new peers from file to Consul
+	peersFile := c.String("peers")
+	if peersFile != "" {
+		filePeers, err := config.LoadPeersFromFile(peersFile)
+		if err != nil {
+			logger.Fatal("Failed to load peers from file", err)
+		}
+		if err := config.SyncPeersToConsul(consulClient.KV(), filePeers); err != nil {
+			logger.Fatal("Failed to sync peers to Consul", err)
+		}
+	}
+
+	peers := LoadPeersFromConsul(consulClient)
+	nodeID := GetIDFromName(nodeName, peers)
+
+	badgerKV := NewBadgerKV(nodeName, nodeID, appConfig)
+	defer badgerKV.Close()
+
+	// Start background backup job
+	backupEnabled := viper.GetBool("backup_enabled")
+	if backupEnabled {
+		backupPeriodSeconds := viper.GetInt("backup_period_seconds")
+		stopBackup := StartPeriodicBackup(ctx, badgerKV, backupPeriodSeconds)
+		defer stopBackup()
+	}
+
+	identityStore, err := identity.NewFileStore("identity", nodeName, decryptPrivateKey, agePasswordFile)
+	if err != nil {
+		logger.Fatal("Failed to create identity store", err)
+	}
+
+	natsConn, err := GetNATSConnection(environment, appConfig)
+	if err != nil {
+		logger.Fatal("Failed to connect to NATS", err)
+	}
+
+	pubsub := messaging.NewNATSPubSub(natsConn)
+	maxConcurrentKeygen := viper.GetInt("max_concurrent_keygen")
+	if maxConcurrentKeygen == 0 {
+		maxConcurrentKeygen = eventconsumer.DefaultConcurrentKeygen
+	}
+	maxConcurrentSigning := viper.GetInt("max_concurrent_signing")
+	if maxConcurrentSigning == 0 {
+		maxConcurrentSigning = eventconsumer.DefaultConcurrentSigning
+	}
+
+	keygenBroker, err := messaging.NewJetStreamBroker(ctx, natsConn, event.KeygenBrokerStream, []string{
+		event.KeygenRequestTopic,
+	},
+		messaging.WithMaxAckPending(maxConcurrentKeygen),
+	)
+	if err != nil {
+		logger.Fatal("Failed to create keygen jetstream broker", err)
+	}
+	signingBroker, err := messaging.NewJetStreamBroker(ctx, natsConn, event.SigningPublisherStream, []string{
+		event.SigningRequestTopic,
+	},
+		messaging.WithMaxAckPending(maxConcurrentSigning),
+	)
+	if err != nil {
+		logger.Fatal("Failed to create signing jetstream broker", err)
+	}
+
+	directMessaging := messaging.NewNatsDirectMessaging(natsConn)
+	mqManager := messaging.NewNATsMessageQueueManager("mpc", []string{
+		"mpc.mpc_keygen_result.*",
+		event.SigningResultTopic,
+		"mpc.mpc_reshare_result.*",
+	}, natsConn)
+
+	genKeyResultQueue := mqManager.NewMessageQueue("mpc_keygen_result")
+	defer genKeyResultQueue.Close()
+	singingResultQueue := mqManager.NewMessageQueue("mpc_signing_result")
+	defer singingResultQueue.Close()
+	reshareResultQueue := mqManager.NewMessageQueue("mpc_reshare_result")
+	defer reshareResultQueue.Close()
+
+	logger.Info("Starting mpcinfra node", "version", Version, "ID", nodeID, "name", nodeName)
+
+	peerNodeIDs := GetPeerIDs(peers)
+	peerRegistry := mpc.NewRegistry(nodeID, peerNodeIDs, consulClient.KV(), directMessaging, pubsub, identityStore)
+
+	chainCodeHex := viper.GetString("chain_code")
+	ckd, err := mpc.NewCKDFromHex(chainCodeHex)
+	if err != nil {
+		logger.Fatal("Failed to create ckd store", err)
+	}
+
+	mpcNode := mpc.NewNode(
+		nodeID,
+		peerNodeIDs,
+		pubsub,
+		directMessaging,
+		badgerKV,
+		keyinfoStore,
+		peerRegistry,
+		identityStore,
+		ckd,
+	)
+	defer mpcNode.Close()
+
+	eventConsumer := eventconsumer.NewEventConsumer(
+		mpcNode,
+		pubsub,
+		genKeyResultQueue,
+		singingResultQueue,
+		reshareResultQueue,
+		identityStore,
+	)
+	eventConsumer.Run()
+	defer eventConsumer.Close()
+
+	timeoutConsumer := eventconsumer.NewTimeOutConsumer(
+		natsConn,
+		singingResultQueue,
+	)
+
+	timeoutConsumer.Run()
+	defer timeoutConsumer.Close()
+	keygenConsumer := eventconsumer.NewKeygenConsumer(natsConn, keygenBroker, pubsub, peerRegistry, genKeyResultQueue)
+	signingConsumer := eventconsumer.NewSigningConsumer(natsConn, signingBroker, pubsub, peerRegistry, singingResultQueue)
+
+	// Make the node ready before starting the signing consumer
+	if err := peerRegistry.Ready(); err != nil {
+		logger.Error("Failed to mark peer registry as ready", err)
+	}
+	logger.Info("[READY] Node is ready", "nodeID", nodeID)
+
+	// Start health check server (disabled by default)
+	var healthServer *healthcheck.Server
+	if viper.GetBool("healthcheck.enabled") {
+		healthAddr := viper.GetString("healthcheck.address")
+		if healthAddr == "" {
+			healthAddr = ":8080"
+		}
+		healthServer = healthcheck.NewServer(healthAddr, peerRegistry, natsConn, consulClient)
+		go func() {
+			if err := healthServer.Start(); err != nil {
+				logger.Error("Health check server error", err)
+			}
+		}()
+	}
+
+	logger.Info("Starting consumers", "nodeID", nodeID)
+	appContext, cancel := context.WithCancel(context.Background())
+	//Setup signal handling to cancel context on termination signals.
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		<-sigChan
+		logger.Warn("Shutdown signal received, canceling context...")
+		cancel()
+
+		// Shutdown health check server if it was started
+		if healthServer != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := healthServer.Shutdown(shutdownCtx); err != nil {
+				logger.Error("Failed to shutdown health check server", err)
+			}
+		}
+
+		// Resign from peer registry first (before closing NATS)
+		if err := peerRegistry.Resign(); err != nil {
+			logger.Error("Failed to resign from peer registry", err)
+		}
+
+		// Gracefully close consumers
+		if err := keygenConsumer.Close(); err != nil {
+			logger.Error("Failed to close keygen consumer", err)
+		}
+		if err := signingConsumer.Close(); err != nil {
+			logger.Error("Failed to close signing consumer", err)
+		}
+
+		err := natsConn.Drain()
+		if err != nil {
+			logger.Error("Failed to drain NATS connection", err)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, 3)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := keygenConsumer.Run(appContext); err != nil {
+			if appContext.Err() != context.Canceled {
+				logger.Error("error running keygen consumer", err)
+				errChan <- fmt.Errorf("keygen consumer error: %w", err)
+			} else {
+				logger.Info("Keygen consumer finished successfully")
+			}
+			return
+		}
+		logger.Info("Keygen consumer finished successfully")
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := signingConsumer.Run(appContext); err != nil {
+			if appContext.Err() != context.Canceled {
+				logger.Error("error running signing consumer", err)
+				errChan <- fmt.Errorf("signing consumer error: %w", err)
+			} else {
+				logger.Info("Signing consumer finished successfully")
+			}
+			return
+		}
+		logger.Info("Signing consumer finished successfully")
+	}()
+
+	go func() {
+		wg.Wait()
+		logger.Info("All consumers have finished")
+		close(errChan)
+	}()
+	for err := range errChan {
+		if err != nil {
+			logger.Error("Consumer error received", err)
+			cancel()
+			return err
+		}
+	}
+
+	return nil
+}
+
+// loadPasswordFromFile reads the BadgerDB password from a file
+func loadPasswordFromFile(filePath string) error {
+	passwordBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read password file %s: %w", filePath, err)
+	}
+
+	// Trim whitespace/newlines without altering content
+	password := strings.TrimSpace(string(passwordBytes))
+
+	if password == "" {
+		security.ZeroBytes(passwordBytes)
+		return fmt.Errorf("password file %s is empty", filePath)
+	}
+
+	viper.Set("badger_password", password)
+	security.ZeroBytes(passwordBytes)
+	security.ZeroString(&password)
+
+	return nil
+}
+
+// Prompt user for sensitive configuration values
+func promptForSensitiveCredentials() {
+	fmt.Println("WARNING: Please back up your Badger DB password in a secure location.")
+	fmt.Println("If you lose this password, you will permanently lose access to your data!")
+
+	// Prompt for badger password with confirmation
+	var badgerPass []byte
+	var confirmPass []byte
+	var err error
+
+	// Ensure sensitive buffers are zeroed on exit
+	defer func() {
+		security.ZeroBytes(badgerPass)
+		security.ZeroBytes(confirmPass)
+	}()
+
+	for {
+		fmt.Print("Enter Badger DB password: ")
+		badgerPass, err = term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			logger.Fatal("Failed to read badger password", err)
+		}
+		fmt.Println() // Add newline after password input
+
+		if len(badgerPass) == 0 {
+			fmt.Println("Password cannot be empty. Please try again.")
+			continue
+		}
+
+		fmt.Print("Confirm Badger DB password: ")
+		confirmPass, err = term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			logger.Fatal("Failed to read confirmation password", err)
+		}
+		fmt.Println() // Add newline after password input
+
+		if string(badgerPass) != string(confirmPass) {
+			fmt.Println("Passwords do not match. Please try again.")
+			continue
+		}
+
+		break
+	}
+
+	// Show masked password for confirmation
+	passwordStr := string(badgerPass)
+	maskedPassword := maskString(passwordStr)
+	fmt.Printf("Password set: %s\n", maskedPassword)
+	viper.Set("badger_password", passwordStr)
+	security.ZeroString(&passwordStr)
+}
+
+// maskString shows the first and last character of a string, replacing the middle with asterisks
+func maskString(s string) string {
+	if len(s) <= 2 {
+		return s // Too short to mask
+	}
+
+	masked := s[0:1]
+	for i := 0; i < len(s)-2; i++ {
+		masked += "*"
+	}
+	masked += s[len(s)-1:]
+
+	return masked
+}
+
+// Check required configuration values are present
+func checkRequiredConfigValues(appConfig *config.AppConfig) {
+	// Show warning if we're using file-based config but no password is set
+	if viper.GetString("badger_password") == "" {
+		logger.Fatal("Badger password is required", nil)
+	}
+
+	if viper.GetString("event_initiator_pubkey") == "" {
+		logger.Fatal("Event initiator public key is required", nil)
+	}
+
+	chainCode := strings.TrimSpace(viper.GetString("chain_code"))
+	if chainCode == "" {
+		logger.Fatal("chain_code is required in config.yaml", nil)
+	}
+	if len(chainCode) != 64 { // 32 bytes hex
+		logger.Fatal("chain_code must be 32-byte hex (64 chars)", nil)
+	}
+}
+
+func NewConsulClient(addr string) *api.Client {
+	// Create a new Consul client
+	consulConfig := api.DefaultConfig()
+	consulConfig.Address = addr
+	consulClient, err := api.NewClient(consulConfig)
+	if err != nil {
+		logger.Fatal("Failed to create consul client", err)
+	}
+	logger.Info("Connected to consul!")
+	return consulClient
+}
+
+func LoadPeersFromConsul(consulClient *api.Client) []config.Peer { // Create a Consul Key-Value store client
+	kv := consulClient.KV()
+	peers, err := config.LoadPeersFromConsul(kv, config.PeersPrefix)
+	if err != nil {
+		logger.Fatal("Failed to load peers from Consul", err)
+	}
+	logger.Info("Loaded peers from consul", "peers", peers)
+
+	return peers
+}
+
+func GetPeerIDs(peers []config.Peer) []string {
+	var peersIDs []string
+	for _, peer := range peers {
+		peersIDs = append(peersIDs, peer.ID)
+	}
+	return peersIDs
+}
+
+// Given node name, loop through peers and find the matching ID
+func GetIDFromName(name string, peers []config.Peer) string {
+	// Get nodeID from node name
+	nodeID := config.GetNodeID(name, peers)
+	if nodeID == "" {
+		logger.Fatal("Empty Node ID", fmt.Errorf("node ID not found for name %s", name))
+	}
+
+	return nodeID
+}
+
+func NewBadgerKV(nodeName, nodeID string, appConfig *config.AppConfig) *kvstore.BadgerKVStore {
+	// Badger KV DB
+	// Use configured db_path or default to current directory + "db"
+	basePath := viper.GetString("db_path")
+	if basePath == "" {
+		basePath = filepath.Join(".", "db")
+	}
+	dbPath := filepath.Join(basePath, nodeName)
+
+	// Use configured backup_dir or default to current directory + "backups"
+	backupDir := viper.GetString("backup_dir")
+	if backupDir == "" {
+		backupDir = filepath.Join(".", "backups")
+	}
+
+	// Create BadgerConfig struct
+	config := kvstore.BadgerConfig{
+		NodeID:              nodeName,
+		EncryptionKey:       []byte(appConfig.BadgerPassword),
+		BackupEncryptionKey: []byte(appConfig.BadgerPassword), // Using same key for backup encryption
+		BackupDir:           backupDir,
+		DBPath:              dbPath,
+	}
+
+	badgerKv, err := kvstore.NewBadgerKVStore(config)
+	if err != nil {
+		logger.Fatal("Failed to create badger kv store", err)
+	}
+	logger.Info("Connected to badger kv store", "path", dbPath, "backup_dir", backupDir)
+	return badgerKv
+}
+
+func StartPeriodicBackup(ctx context.Context, badgerKV *kvstore.BadgerKVStore, periodSeconds int) func() {
+	if periodSeconds <= 0 {
+		periodSeconds = DefaultBackupPeriodSeconds
+	}
+	backupTicker := time.NewTicker(time.Duration(periodSeconds) * time.Second)
+	backupCtx, backupCancel := context.WithCancel(ctx)
+	go func() {
+		for {
+			select {
+			case <-backupCtx.Done():
+				logger.Info("Backup background job stopped")
+				return
+			case <-backupTicker.C:
+				logger.Info("Running periodic BadgerDB backup...")
+				err := badgerKV.Backup()
+				if err != nil {
+					logger.Error("Periodic BadgerDB backup failed", err)
+				} else {
+					logger.Info("Periodic BadgerDB backup completed successfully")
+				}
+			}
+		}
+	}()
+	return backupCancel
+}
+
+func GetNATSConnection(environment string, appConfig *config.AppConfig) (*nats.Conn, error) {
+	url := appConfig.NATs.URL
+	opts := []nats.Option{
+		nats.MaxReconnects(-1), // retry forever
+		nats.ReconnectWait(2 * time.Second),
+		nats.ReconnectBufSize(16 * 1024 * 1024), // 16MB buffer during reconnect
+		// Use a custom dialer with TCP keepalive to prevent servers from killing idle connections
+		nats.Dialer(&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second, // TCP keepalive every 30s — counts as wire activity for AWS
+		}),
+		// Ping every 20s, fail after 3 missed pings (60s).
+		// This detects dead connections well before AWS NAT Gateway's
+		// 350s idle timeout kills the TCP connection silently.
+		nats.PingInterval(20 * time.Second),
+		nats.MaxPingsOutstanding(3),
+		// Enable TCP keepalive to prevent network gateway from killing idle connections.
+		// This sends TCP-level keepalive probes that count as wire activity,
+		// preventing NAT Gateway / NLB idle timeout eviction.
+		nats.CustomInboxPrefix("_INBOX_mpcinfra"),
+		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			if err != nil {
+				logger.Warn("Disconnected from NATS", "error", err.Error())
+			} else {
+				logger.Warn("Disconnected from NATS")
+			}
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			logger.Info("Reconnected to NATS", "url", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			logger.Info("NATS connection closed!")
+		}),
+	}
+
+	if environment == constant.EnvProduction {
+		// Load TLS config from configuration
+		var clientCert, clientKey, caCert string
+		if appConfig.NATs.TLS != nil {
+			clientCert = appConfig.NATs.TLS.ClientCert
+			clientKey = appConfig.NATs.TLS.ClientKey
+			caCert = appConfig.NATs.TLS.CACert
+		}
+
+		// Fallback to default paths if not configured
+		if clientCert == "" {
+			clientCert = filepath.Join(".", "certs", "client-cert.pem")
+		}
+		if clientKey == "" {
+			clientKey = filepath.Join(".", "certs", "client-key.pem")
+		}
+		if caCert == "" {
+			caCert = filepath.Join(".", "certs", "rootCA.pem")
+		}
+
+		opts = append(opts,
+			nats.ClientCert(clientCert, clientKey),
+			nats.RootCAs(caCert),
+			nats.UserInfo(appConfig.NATs.Username, appConfig.NATs.Password),
+		)
+	}
+
+	return nats.Connect(url, opts...)
+}

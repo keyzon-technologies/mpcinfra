@@ -1,0 +1,54 @@
+
+===============================
+EDDSA SIGNING BENCHMARK RESULTS SUMMARY
+===============================
+Timestamp: 2025-09-25T20:52:35+07:00
+Operation Type: EdDSA Signing
+Total benchmark time: 1m5.271427885s
+Total batches sent: 125
+Total requests sent: 1000
+Successful completions: 1000
+Failed operations: 0
+Success rate: 100.00%
+Error rate: 0.00%
+Average operations per minute: 919.24
+Average operation time: 27.639836611s
+Median operation time: 28.132345011s
+
+------------------------------
+8 REQUEST ANALYSIS
+------------------------------
+Completed from first 8: 8/8
+Fastest (first 8): 164.535132ms
+Slowest (first 8): 488.81932ms
+
+
+================================================================================
+
+
+===============================
+EDDSA SIGNING BENCHMARK RESULTS SUMMARY
+===============================
+Timestamp: 2025-09-25T21:01:04+07:00
+Operation Type: EdDSA Signing
+Total benchmark time: 1m4.385020314s
+Total batches sent: 125
+Total requests sent: 1000
+Successful completions: 999
+Failed operations: 1
+Success rate: 99.90%
+Error rate: 0.10%
+Average operations per minute: 930.96
+Average operation time: 26.909120645s
+Median operation time: 26.883269259s
+
+------------------------------
+8 REQUEST ANALYSIS
+------------------------------
+Completed from first 8: 8/8
+Fastest (first 8): 169.161193ms
+Slowest (first 8): 457.503189ms
+
+
+================================================================================
+

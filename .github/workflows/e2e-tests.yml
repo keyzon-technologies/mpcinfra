@@ -1,0 +1,111 @@
+name: E2E Integration Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  GO_VERSION: "1.25.8"
+  CGO_ENABLED: 0
+  DOCKER_BUILDKIT: 1
+  GO_BUILD_FLAGS: -trimpath -ldflags="-s -w"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+
+      - id: cache-key
+        run: echo "key=${{ runner.os }}-binaries-${{ hashFiles('**/go.sum', '**/*.go') }}" >> $GITHUB_OUTPUT
+
+      - uses: actions/cache@v4
+        id: cache-binaries
+        with:
+          path: |
+            ./mpcinfra
+            ./mpcinfra-cli
+          key: ${{ steps.cache-key.outputs.key }}
+
+      - if: steps.cache-binaries.outputs.cache-hit != 'true'
+        run: cd e2e && go mod tidy
+
+      - if: steps.cache-binaries.outputs.cache-hit != 'true'
+        run: |
+          go build ${{ env.GO_BUILD_FLAGS }} -o mpcinfra ./cmd/mpcinfra
+          go build ${{ env.GO_BUILD_FLAGS }} -o mpcinfra-cli ./cmd/mpcinfra-cli
+          chmod +x mpcinfra mpcinfra-cli
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        testcase: [TestKeyGeneration, TestSigning, TestResharing, TestCKDSigning]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: "**/go.sum"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - run: docker --version && docker compose version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ./mpcinfra
+            ./mpcinfra-cli
+          key: ${{ needs.build.outputs.cache-key }}
+
+      - run: sudo mv mpcinfra /usr/local/bin/ && sudo mv mpcinfra-cli /usr/local/bin/
+
+      - run: which mpcinfra && which mpcinfra-cli
+
+      - run: cd e2e && go mod tidy
+
+      - name: Run ${{ matrix.testcase }} E2E tests
+        run: |
+          cd e2e
+          go test -v -timeout=1200s -run ${{ matrix.testcase }}
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.testcase }}-test-logs
+          path: e2e/logs/
+          retention-days: 7
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: always()
+    steps:
+      - run: |
+          echo "E2E Test Results Summary:"
+          echo "========================="
+          echo "Matrix job status: ${{ needs.e2e.result }}"
+
+          if [[ "${{ needs.e2e.result }}" == "success" ]]; then
+            echo "✅ All E2E tests passed successfully"
+          else
+            echo "❌ One or more E2E tests failed"
+            exit 1
+          fi

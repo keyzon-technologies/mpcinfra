@@ -1,0 +1,679 @@
+package identity
+
+import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+
+	"filippo.io/age"
+	"golang.org/x/term"
+
+	"github.com/keyzon-technologies/mpcinfra/pkg/common/pathutil"
+	"github.com/keyzon-technologies/mpcinfra/pkg/encryption"
+	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
+	"github.com/keyzon-technologies/mpcinfra/pkg/security"
+	"github.com/keyzon-technologies/mpcinfra/pkg/types"
+	"github.com/spf13/viper"
+)
+
+// NodeIdentity represents a node's identity information
+type NodeIdentity struct {
+	NodeName  string `json:"node_name"`
+	NodeID    string `json:"node_id"`
+	PublicKey string `json:"public_key"`
+	CreatedAt string `json:"created_at"`
+}
+
+// Store manages node identities
+type Store interface {
+	// GetPublicKey retrieves a node's public key by its ID
+	GetPublicKey(nodeID string) ([]byte, error)
+	VerifyInitiatorMessage(msg types.InitiatorMessage) error
+	AuthorizeInitiatorMessage(msg types.InitiatorMessage) error
+	SignMessage(msg *types.MpcMsg) ([]byte, error)
+	VerifyMessage(msg *types.MpcMsg) error
+
+	SignEcdhMessage(msg *types.ECDHMessage) ([]byte, error)
+	VerifySignature(msg *types.ECDHMessage) error
+
+	SetSymmetricKey(peerID string, key []byte)
+	GetSymmetricKey(peerID string) ([]byte, error)
+	RemoveSymmetricKey(peerID string)
+	GetSymetricKeyCount() int
+	CheckSymmetricKeyComplete(desired int) bool
+
+	EncryptMessage(plaintext []byte, peerID string) ([]byte, error)
+	DecryptMessage(cipher []byte, peerID string) ([]byte, error)
+}
+
+type InitiatorKey struct {
+	Algorithm types.EventInitiatorKeyType
+	Ed25519   []byte
+	P256      *ecdsa.PublicKey
+}
+
+// SignatureAlgorithm represents supported signature algorithms
+type SignatureAlgorithm string
+
+const (
+	AlgorithmEd25519 SignatureAlgorithm = "ed25519"
+	AlgorithmP256    SignatureAlgorithm = "p256"
+)
+
+type AuthorizerID string
+
+// AuthorizerPublicKey represents a single authorizer with their public key and algorithm
+type AuthorizerPublicKey struct {
+	PublicKey string             `json:"public_key" mapstructure:"public_key"`
+	Algorithm SignatureAlgorithm `json:"algorithm" mapstructure:"algorithm"`
+}
+
+type AuthorizationConfig struct {
+	Enabled              bool                                 `mapstructure:"enabled"`
+	RequiredAuthorizers  []AuthorizerID                       `mapstructure:"required_authorizers"`
+	AuthorizerPublicKeys map[AuthorizerID]AuthorizerPublicKey `mapstructure:"authorizer_public_keys"`
+}
+
+// AuthorizerConfigEntry represents the raw configuration for an authorizer
+type AuthorizerConfigEntry struct {
+	PublicKey string `mapstructure:"public_key"`
+	Algorithm string `mapstructure:"algorithm"`
+}
+
+// fileStore implements the Store interface using the filesystem
+type fileStore struct {
+	identityDir     string
+	currentNodeName string
+
+	// Cache for public keys by node_id
+	publicKeys map[string][]byte
+	mu         sync.RWMutex
+
+	privateKey           []byte
+	initiatorKey         *InitiatorKey
+	symmetricKeys        map[string][]byte
+	authConfig           AuthorizationConfig
+	cachedAuthorizerKeys map[AuthorizerID]any // ed25519.PublicKey or *ecdsa.PublicKey
+}
+
+// NewFileStore creates a new identity store
+func NewFileStore(identityDir, nodeName string, decrypt bool, agePasswordFile string) (*fileStore, error) {
+	if err := os.MkdirAll(identityDir, 0750); err != nil {
+		return nil, fmt.Errorf("failed to create identity directory: %w", err)
+	}
+
+	privateKeyHex, err := loadPrivateKey(identityDir, nodeName, decrypt, agePasswordFile)
+	if err != nil {
+		return nil, err
+	}
+
+	privateKey, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key format: %w", err)
+	}
+
+	initiatorKey, err := loadInitiatorKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	// Load peers.json to validate all nodes have identity files
+	peersData, err := os.ReadFile("peers.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read peers.json: %w", err)
+	}
+
+	peers := make(map[string]string)
+	if err := json.Unmarshal(peersData, &peers); err != nil {
+		return nil, fmt.Errorf("failed to parse peers.json: %w", err)
+	}
+
+	store := &fileStore{
+		identityDir:          identityDir,
+		currentNodeName:      nodeName,
+		publicKeys:           make(map[string][]byte),
+		privateKey:           privateKey,
+		initiatorKey:         initiatorKey,
+		symmetricKeys:        make(map[string][]byte),
+		cachedAuthorizerKeys: make(map[AuthorizerID]any),
+	}
+
+	// Check that each node in peers.json has an identity file
+	for nodeName, nodeID := range peers {
+		identityFileName := fmt.Sprintf("%s_identity.json", nodeName)
+		identityFilePath, err := pathutil.SafePath(identityDir, identityFileName)
+		if err != nil {
+			return nil, fmt.Errorf("invalid identity file path for node %s: %w", nodeName, err)
+		}
+
+		data, err := os.ReadFile(identityFilePath)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"missing identity file for node %s (%s): %w",
+				nodeName,
+				nodeID,
+				err,
+			)
+		}
+
+		var identity NodeIdentity
+		if err := json.Unmarshal(data, &identity); err != nil {
+			return nil, fmt.Errorf("failed to parse identity file for node %s: %w", nodeName, err)
+		}
+
+		// Verify that the nodeID in peers.json matches the one in the identity file
+		if identity.NodeID != nodeID {
+			return nil, fmt.Errorf(
+				"node ID mismatch for %s: %s in peers.json vs %s in identity file",
+				nodeName,
+				nodeID,
+				identity.NodeID,
+			)
+		}
+
+		key, err := hex.DecodeString(identity.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid public key format for node %s: %w", nodeName, err)
+		}
+
+		store.publicKeys[identity.NodeID] = key
+	}
+
+	err = store.loadAuthorizationConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return store, nil
+}
+
+func loadInitiatorKeys() (*InitiatorKey, error) {
+	// Get algorithm configuration with default
+	algorithm := viper.GetString("event_initiator_algorithm")
+	if algorithm == "" {
+		algorithm = string(types.KeyTypeEd25519)
+	}
+
+	// Validate algorithm
+	if !slices.Contains(
+		[]string{string(types.EventInitiatorKeyTypeEd25519), string(types.EventInitiatorKeyTypeP256)},
+		algorithm,
+	) {
+		return nil, fmt.Errorf("invalid algorithm: %s. Must be %s or %s",
+			algorithm,
+			types.EventInitiatorKeyTypeEd25519,
+			types.EventInitiatorKeyTypeP256,
+		)
+	}
+
+	var initiatorKey *InitiatorKey
+
+	switch algorithm {
+	case string(types.EventInitiatorKeyTypeEd25519):
+		key, err := loadEd25519InitiatorKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load Ed25519 initiator key: %w", err)
+		}
+		initiatorKey = &InitiatorKey{
+			Algorithm: types.EventInitiatorKeyTypeEd25519,
+			Ed25519:   key,
+		}
+		logger.Info("Loaded Ed25519 initiator public key")
+
+	case string(types.EventInitiatorKeyTypeP256):
+		key, err := loadP256InitiatorKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load P-256 initiator key: %w", err)
+		}
+		initiatorKey = &InitiatorKey{
+			Algorithm: types.EventInitiatorKeyTypeP256,
+			P256:      key,
+		}
+		logger.Info("Loaded P-256 initiator public key")
+	}
+
+	return initiatorKey, nil
+}
+
+// loadAuthorizationConfig loads and caches the authorization configuration
+func (s *fileStore) loadAuthorizationConfig() error {
+	var authConfig AuthorizationConfig
+	if err := viper.UnmarshalKey("authorization", &authConfig); err != nil {
+		return fmt.Errorf("failed to unmarshal authorization config: %w", err)
+	}
+	s.authConfig = authConfig
+	if !authConfig.Enabled {
+		return nil
+	}
+
+	for id, key := range authConfig.AuthorizerPublicKeys {
+		switch key.Algorithm {
+		case AlgorithmEd25519:
+			pubKeyBytes, err := encryption.ParseEd25519PublicKeyFromHex(key.PublicKey)
+			if err != nil {
+				logger.Fatal("Invalid authorization config", fmt.Errorf("invalid ed25519 public key for authorizer %s: %w", id, err))
+			}
+			s.cachedAuthorizerKeys[id] = ed25519.PublicKey(pubKeyBytes)
+
+		case AlgorithmP256:
+			pubKey, err := encryption.ParseP256PublicKeyFromHex(key.PublicKey)
+			if err != nil {
+				logger.Fatal("Invalid authorization config", fmt.Errorf("invalid P256 public key for authorizer %s: %w", id, err))
+			}
+			s.cachedAuthorizerKeys[id] = pubKey
+
+		default:
+			logger.Fatal("Invalid authorization config", fmt.Errorf("unknown algorithm %s for authorizer %s", key.Algorithm, id))
+		}
+	}
+
+	logger.Info("Loaded authorization config", "authConfig", authConfig)
+	return nil
+}
+
+// loadEd25519InitiatorKey loads Ed25519 initiator public key
+func loadEd25519InitiatorKey() ([]byte, error) {
+	pubKeyHex := viper.GetString("event_initiator_pubkey")
+	if pubKeyHex == "" {
+		return nil, fmt.Errorf("event_initiator_pubkey not found in config")
+	}
+
+	key, err := encryption.ParseEd25519PublicKeyFromHex(pubKeyHex)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode event_initiator_pubkey as hex: %w", err)
+	}
+
+	return key, nil
+
+}
+
+func loadP256InitiatorKey() (*ecdsa.PublicKey, error) {
+	pubKeyHex := viper.GetString("event_initiator_pubkey")
+	if pubKeyHex == "" {
+		return nil, fmt.Errorf("event_initiator_pubkey not found in config")
+	}
+
+	// Use the new P256 functions from p256.go
+	publicKey, err := encryption.ParseP256PublicKeyFromHex(pubKeyHex)
+	if err == nil {
+		return publicKey, nil
+	}
+
+	// If hex parsing fails, try base64
+	publicKey, err = encryption.ParseP256PublicKeyFromBase64(pubKeyHex)
+	if err == nil {
+		return publicKey, nil
+	}
+
+	return nil, fmt.Errorf(
+		"failed to decode event_initiator_pubkey as hex or base64: %w",
+		err,
+	)
+}
+
+// loadPrivateKey loads the private key from file, decrypting if necessary
+func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile string) (string, error) {
+	// Check for encrypted or unencrypted private key
+	encryptedKeyFileName := fmt.Sprintf("%s_private.key.age", nodeName)
+	unencryptedKeyFileName := fmt.Sprintf("%s_private.key", nodeName)
+
+	encryptedKeyPath, err := pathutil.SafePath(identityDir, encryptedKeyFileName)
+	if err != nil {
+		return "", fmt.Errorf("invalid encrypted key path for node %s: %w", nodeName, err)
+	}
+
+	unencryptedKeyPath, err := pathutil.SafePath(identityDir, unencryptedKeyFileName)
+	if err != nil {
+		return "", fmt.Errorf("invalid unencrypted key path for node %s: %w", nodeName, err)
+	}
+
+	if decrypt {
+		// Use the encrypted age file
+		if _, err := os.Stat(encryptedKeyPath); err != nil {
+			return "", fmt.Errorf("failed to check encrypted private key for node %s at %s: %w",
+				nodeName, encryptedKeyPath, err)
+		}
+
+		logger.Infof("Using age-encrypted private key for %s", nodeName)
+
+		// Open the encrypted file
+		encryptedFile, err := os.Open(encryptedKeyPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to open encrypted key file: %w", err)
+		}
+		defer encryptedFile.Close()
+
+		var passphrase string
+		if agePasswordFile != "" {
+			// Load passphrase from file
+			data, err := os.ReadFile(agePasswordFile)
+			if err != nil {
+				return "", fmt.Errorf("failed to read age key file %s: %w", agePasswordFile, err)
+			}
+			passphrase = strings.TrimSpace(string(data)) // trim newline if present
+			security.ZeroBytes(data)
+			logger.Infof("Using passphrase from from file: %s to decrypt node private key", agePasswordFile)
+		} else {
+			// Prompt for passphrase from terminal
+			fmt.Print("Enter passphrase to decrypt private key: ")
+			bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println() // newline after prompt
+			if err != nil {
+				return "", fmt.Errorf("failed to read passphrase: %w", err)
+			}
+			passphrase = string(bytePassword)
+			security.ZeroBytes(bytePassword)
+		}
+
+		// Create the identity once, regardless of source
+		identity, err := age.NewScryptIdentity(passphrase)
+		if err != nil {
+			return "", fmt.Errorf("failed to create identity for decryption: %w", err)
+		}
+
+		// Decrypt the file
+		decrypter, err := age.Decrypt(encryptedFile, identity)
+		if err != nil {
+			return "", fmt.Errorf("failed to decrypt private key: %w", err)
+		}
+
+		// Read the decrypted content
+		decryptedData, err := io.ReadAll(decrypter)
+		if err != nil {
+			return "", fmt.Errorf("failed to read decrypted key: %w", err)
+		}
+
+		security.ZeroString(&passphrase)
+		return string(decryptedData), nil
+	} else {
+		// Use the unencrypted private key file
+		if _, err := os.Stat(unencryptedKeyPath); err != nil {
+			return "", fmt.Errorf("no unencrypted private key found for node %s", nodeName)
+		}
+
+		logger.Infof("Using unencrypted private key for %s", nodeName)
+		privateKeyData, err := os.ReadFile(unencryptedKeyPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read private key file: %w", err)
+		}
+		return string(privateKeyData), nil
+	}
+}
+
+// Set SymmetricKey: adds or updates a symmetric key for a given peer ID.
+func (s *fileStore) SetSymmetricKey(peerID string, key []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.symmetricKeys[peerID] = key
+}
+
+// Get SymmetricKey: retrieves a peer node's dh symmetric-key by its ID
+func (s *fileStore) GetSymmetricKey(peerID string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if key, exists := s.symmetricKeys[peerID]; exists {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("SymmetricKey key not found for node ID: %s", peerID)
+}
+
+func (s *fileStore) RemoveSymmetricKey(peerID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.symmetricKeys, peerID)
+}
+
+func (s *fileStore) GetSymetricKeyCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.symmetricKeys)
+}
+
+func (s *fileStore) CheckSymmetricKeyComplete(desired int) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.symmetricKeys) == desired
+}
+
+// GetPublicKey retrieves a node's public key by its ID
+func (s *fileStore) GetPublicKey(nodeID string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if key, exists := s.publicKeys[nodeID]; exists {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("public key not found for node ID: %s", nodeID)
+}
+
+func (s *fileStore) SignMessage(msg *types.MpcMsg) ([]byte, error) {
+	// Get deterministic bytes for signing
+	msgBytes, err := msg.MarshalForSigning()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal message for signing: %w", err)
+	}
+
+	signature := ed25519.Sign(s.privateKey, msgBytes)
+	return signature, nil
+}
+
+// VerifyMessage verifies an MPC message's signature using the sender's public key.
+func (s *fileStore) VerifyMessage(msg *types.MpcMsg) error {
+	if msg.Signature == nil {
+		return fmt.Errorf("message has no signature")
+	}
+
+	// Get the sender's public key
+	publicKey, err := s.GetPublicKey(msg.FromNodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get sender's public key: %w", err)
+	}
+
+	// Get deterministic bytes for verification
+	msgBytes, err := msg.MarshalForSigning()
+	if err != nil {
+		return fmt.Errorf("failed to marshal message for verification: %w", err)
+	}
+
+	// Verify the signature
+	if !ed25519.Verify(publicKey, msgBytes, msg.Signature) {
+		return fmt.Errorf("invalid signature")
+	}
+
+	return nil
+}
+
+func (s *fileStore) EncryptMessage(plaintext []byte, peerID string) ([]byte, error) {
+	key, err := s.GetSymmetricKey(peerID)
+	if err != nil {
+		return nil, err
+	}
+
+	if key == nil {
+		return nil, fmt.Errorf("no symmetric key for peer %s", peerID)
+	}
+
+	return encryption.EncryptAESGCMWithNonceEmbed(plaintext, key)
+}
+
+func (s *fileStore) DecryptMessage(cipher []byte, peerID string) ([]byte, error) {
+	key, err := s.GetSymmetricKey(peerID)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if key == nil {
+		return nil, fmt.Errorf("no symmetric key for peer %s", peerID)
+	}
+	return encryption.DecryptAESGCMWithNonceEmbed(cipher, key)
+}
+
+// Sign ECDH key exchange message
+func (s *fileStore) SignEcdhMessage(msg *types.ECDHMessage) ([]byte, error) {
+	// Get deterministic bytes for signing
+	msgBytes, err := msg.MarshalForSigning()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal message for signing: %w", err)
+	}
+
+	signature := ed25519.Sign(s.privateKey, msgBytes)
+	return signature, nil
+}
+
+// Verify ECDH key exchange message
+func (s *fileStore) VerifySignature(msg *types.ECDHMessage) error {
+	if msg.Signature == nil {
+		return fmt.Errorf("ECDH message has no signature")
+	}
+
+	// Get the sender's public key
+	senderPk, err := s.GetPublicKey(msg.From)
+	if err != nil {
+		return fmt.Errorf("failed to get sender's public key: %w", err)
+	}
+
+	// Get deterministic bytes for verification
+	msgBytes, err := msg.MarshalForSigning()
+	if err != nil {
+		return fmt.Errorf("failed to marshal message for verification: %w", err)
+	}
+
+	// Verify the signature
+	if !ed25519.Verify(senderPk, msgBytes, msg.Signature) {
+		return fmt.Errorf("invalid signature from %s with public key %s", msg.From, hex.EncodeToString(senderPk))
+	}
+
+	return nil
+}
+
+func (s *fileStore) VerifyInitiatorMessage(msg types.InitiatorMessage) error {
+	algo := s.initiatorKey.Algorithm
+
+	switch algo {
+	case types.EventInitiatorKeyTypeEd25519:
+		return s.verifyEd25519(msg)
+	case types.EventInitiatorKeyTypeP256:
+		return s.verifyP256(msg)
+	}
+	return fmt.Errorf("unsupported algorithm: %s", algo)
+}
+
+func (s *fileStore) AuthorizeInitiatorMessage(msg types.InitiatorMessage) error {
+	if !s.authConfig.Enabled {
+		return nil
+	}
+
+	sigs := msg.GetAuthorizerSignatures()
+	if len(s.authConfig.RequiredAuthorizers) > 0 {
+		// Build a map of provided signatures for quick lookup
+		providedSigs := make(map[AuthorizerID]types.AuthorizerSignature)
+		for _, sig := range sigs {
+			providedSigs[AuthorizerID(sig.AuthorizerID)] = sig
+		}
+
+		// Verify that ALL required authorizers have provided signatures
+		for _, requiredID := range s.authConfig.RequiredAuthorizers {
+			if _, ok := providedSigs[requiredID]; !ok {
+				return fmt.Errorf("missing required authorizer signature: %s", requiredID)
+			}
+		}
+	}
+
+	// If no signatures provided but none required, that's okay
+	if len(sigs) == 0 {
+		return nil
+	}
+
+	authorizerRaw, err := types.ComposeAuthorizerRaw(msg)
+	if err != nil {
+		return fmt.Errorf("failed to compose authorizer raw: %w", err)
+	}
+
+	// Verify each authorizer signature
+	for _, sig := range sigs {
+		if err := s.verifyAuthorizerSignature(authorizerRaw, sig); err != nil {
+			return fmt.Errorf("authorizer %s verification failed: %w", sig.AuthorizerID, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *fileStore) verifyAuthorizerSignature(raw []byte, sig types.AuthorizerSignature) error {
+	authPub, ok := s.cachedAuthorizerKeys[AuthorizerID(sig.AuthorizerID)]
+	if !ok {
+		return fmt.Errorf("authorizer %s not found in cache", sig.AuthorizerID)
+	}
+
+	keyMeta := s.authConfig.AuthorizerPublicKeys[AuthorizerID(sig.AuthorizerID)]
+	switch keyMeta.Algorithm {
+	case AlgorithmEd25519:
+		pub := authPub.(ed25519.PublicKey)
+		if !ed25519.Verify(pub, raw, sig.Signature) {
+			return fmt.Errorf("ed25519 verification failed for %s", sig.AuthorizerID)
+		}
+
+	case AlgorithmP256:
+		pub := authPub.(*ecdsa.PublicKey)
+		if err := encryption.VerifyP256Signature(pub, raw, sig.Signature); err != nil {
+			return fmt.Errorf("p256 verification failed for %s: %w", sig.AuthorizerID, err)
+		}
+
+	default:
+		return fmt.Errorf("unsupported algorithm %q for authorizer %s", keyMeta.Algorithm, sig.AuthorizerID)
+	}
+
+	return nil
+}
+
+func (s *fileStore) getAuthorizerPublicKey(authorizerID string) (*AuthorizerPublicKey, error) {
+	publicKey, ok := s.authConfig.AuthorizerPublicKeys[AuthorizerID(authorizerID)]
+	if !ok {
+		return nil, fmt.Errorf("unknown authorizer ID: %s", authorizerID)
+	}
+	return &publicKey, nil
+}
+
+func (s *fileStore) verifyEd25519(msg types.InitiatorMessage) error {
+	msgBytes, err := msg.Raw()
+	if err != nil {
+		return fmt.Errorf("failed to get raw message data: %w", err)
+	}
+	signature := msg.Sig()
+	if len(signature) == 0 {
+		return errors.New("signature is empty")
+	}
+
+	if !ed25519.Verify(s.initiatorKey.Ed25519, msgBytes, signature) {
+		return fmt.Errorf("invalid signature from initiator")
+	}
+	return nil
+}
+
+func (s *fileStore) verifyP256(msg types.InitiatorMessage) error {
+	msgBytes, err := msg.Raw()
+	if err != nil {
+		return fmt.Errorf("failed to get raw message data: %w", err)
+	}
+	signature := msg.Sig()
+
+	if s.initiatorKey.P256 == nil {
+		return fmt.Errorf("initiator public key for secp256r1 is not set")
+	}
+
+	return encryption.VerifyP256Signature(s.initiatorKey.P256, msgBytes, signature)
+}

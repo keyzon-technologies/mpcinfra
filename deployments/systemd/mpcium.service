@@ -1,0 +1,42 @@
+[Unit]
+Description=mpcinfra MPC Node
+Documentation=https://github.com/keyzon-technologies/mpcinfra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mpcinfra
+Group=mpcinfra
+WorkingDirectory=/opt/mpcinfra
+ExecStart=/usr/local/bin/mpcinfra start --name ${mpcinfra_NODE_NAME} --config /etc/mpcinfra/config.yaml --password-file=%d/mpcinfra-db-password.cred
+EnvironmentFile=/opt/mpcinfra/.env
+SetCredentialEncrypted=mpcinfra-db-password.cred:DB_PASSWORD_BASE64_BLOB_DATA
+SetCredentialEncrypted=mpcinfra-identity-password.cred:IDENTITY_PASSWORD_BASE64_BLOB_DATA
+Restart=always
+RestartSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mpcinfra
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadOnlyPaths=/etc/mpcinfra
+ReadWritePaths=/opt/mpcinfra
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

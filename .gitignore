@@ -1,0 +1,27 @@
+db/
+tmp/
+bin/
+event_initiator.identity.json
+event_initiator.key
+event_initiator.key.age
+coverage.out
+coverage.html
+node*/
+peers.json
+
+# E2E test artifacts
+e2e/test_db/
+e2e/test_node*/
+e2e/test_event_initiator.*
+e2e/coverage.out
+e2e/coverage.html
+e2e/logs/
+# Generated config file (template is tracked)
+e2e/config.test.yaml
+node0
+node1
+node2
+config.yaml
+.vscode
+.vagrant
+.chain_code
