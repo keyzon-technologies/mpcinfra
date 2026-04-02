@@ -111,6 +111,8 @@ func NewFileStore(identityDir, nodeName string, decrypt bool, agePasswordFile st
 		return nil, fmt.Errorf("failed to create identity directory: %w", err)
 	}
 
+	identityDir = identityDir + "/" + nodeName
+
 	privateKeyHex, err := loadPrivateKey(identityDir, nodeName, decrypt, agePasswordFile)
 	if err != nil {
 		return nil, err
@@ -332,6 +334,9 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		return "", fmt.Errorf("invalid encrypted key path for node %s: %w", nodeName, err)
 	}
 
+	println("identityDir: ", identityDir)
+	println("unencryptedKeyFileName: ", unencryptedKeyFileName)
+
 	unencryptedKeyPath, err := pathutil.SafePath(identityDir, unencryptedKeyFileName)
 	if err != nil {
 		return "", fmt.Errorf("invalid unencrypted key path for node %s: %w", nodeName, err)
@@ -396,6 +401,7 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		security.ZeroString(&passphrase)
 		return string(decryptedData), nil
 	} else {
+		println(unencryptedKeyPath)
 		// Use the unencrypted private key file
 		if _, err := os.Stat(unencryptedKeyPath); err != nil {
 			return "", fmt.Errorf("no unencrypted private key found for node %s", nodeName)

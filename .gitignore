@@ -25,3 +25,7 @@ config.yaml
 .vscode
 .vagrant
 .chain_code
+
+# ===
+
+backups/*

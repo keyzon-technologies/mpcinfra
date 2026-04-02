@@ -75,13 +75,15 @@ type ecdsaKeygenSession struct {
 	done             func() // called when all phases complete
 
 	// DKLS19 pair setup state (phase 2 — started after FROST finishes)
-	aliceIterators map[string]*dklsv2.AliceDkg // pairKey → iterator (self is Alice)
-	bobIterators   map[string]*dklsv2.BobDkg   // pairKey → iterator (self is Bob)
+	aliceIterators   map[string]*dklsv2.AliceDkg // pairKey → iterator (self is Alice)
+	bobIterators     map[string]*dklsv2.BobDkg   // pairKey → iterator (self is Bob)
 	pairsMu          sync.Mutex
-	pairMutexes      map[string]*sync.Mutex  // one mutex per pair key
-	pairsComplete    map[string]bool          // marks which pairs have finished
-	persistOnce      sync.Once               // ensure persistAndFinish runs exactly once
-	pairSetupStarted atomic.Bool             // guards startPairSetupPhase from being called twice
+	pairMutexes      map[string]*sync.Mutex // one mutex per pair key
+	pairsComplete    map[string]bool        // marks which pairs have finished
+	persistOnce      sync.Once              // ensure persistAndFinish runs exactly once
+	pairSetupStarted atomic.Bool            // guards startPairSetupPhase from being called twice
+	pairSetupReady   atomic.Bool            // set after iterators are populated
+	pendingPairMsgs  []*types.MpcMsg        // messages buffered before pair setup was ready
 
 	curve *curves.Curve
 }
@@ -98,6 +100,22 @@ func newECDSAKeygenSession(
 	resultQueue messaging.MessageQueue,
 	identityStore identity.Store,
 ) *ecdsaKeygenSession {
+	println("")
+	println("")
+	println("")
+	println("")
+	println("")
+
+	println("La eleee")
+	println(nodeID)
+	println(peerIDs)
+
+	println("")
+	println("")
+	println("")
+	println("")
+	println("")
+
 	return &ecdsaKeygenSession{
 		session: session{
 			walletID:      walletID,
@@ -214,7 +232,15 @@ func (s *ecdsaKeygenSession) GenerateKey(done func()) {
 func (s *ecdsaKeygenSession) runFrostRound1() {
 	bcast, p2pSend, err := s.frostParticipant.Round1(nil)
 	if err != nil {
+		println("")
+		println("")
+		println("")
+
 		s.sendErr(fmt.Errorf("ECDSA keygen: FROST Round1: %w", err))
+
+		println("")
+		println("")
+		println("")
 		return
 	}
 
@@ -243,7 +269,15 @@ func (s *ecdsaKeygenSession) runFrostRound1() {
 	for peerParticipantID, share := range p2pSend {
 		shareBytes, err := json.Marshal(share)
 		if err != nil {
+			println("")
+			println("")
+			println("")
+
 			s.sendErr(fmt.Errorf("ECDSA keygen: marshal FROST p2p share: %w", err))
+
+			println("")
+			println("")
+			println("")
 			return
 		}
 		toNodeID := s.nodeIDOf(peerParticipantID)
@@ -428,15 +462,30 @@ func (s *ecdsaKeygenSession) startPairSetupPhase() {
 
 			s.pairMutexes[key] = &sync.Mutex{}
 			if selfID == alicePID {
-				alice := dklsv2.NewAliceDkgWithSecret(s.curve, weightedShare, 1)
+				alice := dklsv2.NewAliceDkgWithSecret(s.curve, weightedShare, dklsv2.Version2)
 				s.aliceIterators[key] = alice
 			} else {
-				bob := dklsv2.NewBobDkgWithSecret(s.curve, weightedShare, 1)
+				bob := dklsv2.NewBobDkgWithSecret(s.curve, weightedShare, dklsv2.Version2)
 				s.bobIterators[key] = bob
 				// Bob initiates; run Round1 immediately.
 				go s.sendDklsIteratorMsg(key, aliceNodeID, bobNodeID, bob, nil, aliceNodeID)
 			}
 		}
+	}
+
+	// Mark iterators as ready, then replay any messages that arrived before setup.
+	s.pairSetupReady.Store(true)
+	s.pairsMu.Lock()
+	pending := s.pendingPairMsgs
+	s.pendingPairMsgs = nil
+	s.pairsMu.Unlock()
+	for _, m := range pending {
+		var protMsg protocol.Message
+		if err := json.Unmarshal(m.Payload, &protMsg); err != nil {
+			s.sendErr(fmt.Errorf("DKLS pair setup (buffered) %s: unmarshal msg: %w", pairKey(m.PairAlice, m.PairBob), err))
+			return
+		}
+		s.dispatchDklsPairMsg(m, &protMsg)
 	}
 }
 
@@ -489,22 +538,33 @@ func (s *ecdsaKeygenSession) handleDklsPairMsg(msg *types.MpcMsg) {
 		return
 	}
 
+	if !s.pairSetupReady.Load() {
+		// Iterators not yet populated — buffer the message and replay after setup.
+		s.pairsMu.Lock()
+		s.pendingPairMsgs = append(s.pendingPairMsgs, msg)
+		s.pairsMu.Unlock()
+		return
+	}
+
+	s.dispatchDklsPairMsg(msg, &protMsg)
+}
+
+func (s *ecdsaKeygenSession) dispatchDklsPairMsg(msg *types.MpcMsg, protMsg *protocol.Message) {
+	key := pairKey(msg.PairAlice, msg.PairBob)
 	if msg.PairAlice == s.session.nodeID {
 		alice, ok := s.aliceIterators[key]
 		if !ok {
 			logger.Warn("DKLS pair setup: unknown Alice pair", "key", key)
 			return
 		}
-		// Alice replies to Bob.
-		go s.sendDklsIteratorMsg(key, msg.PairAlice, msg.PairBob, alice, &protMsg, msg.PairBob)
+		go s.sendDklsIteratorMsg(key, msg.PairAlice, msg.PairBob, alice, protMsg, msg.PairBob)
 	} else if msg.PairBob == s.session.nodeID {
 		bob, ok := s.bobIterators[key]
 		if !ok {
 			logger.Warn("DKLS pair setup: unknown Bob pair", "key", key)
 			return
 		}
-		// Bob replies to Alice.
-		go s.sendDklsIteratorMsg(key, msg.PairAlice, msg.PairBob, bob, &protMsg, msg.PairAlice)
+		go s.sendDklsIteratorMsg(key, msg.PairAlice, msg.PairBob, bob, protMsg, msg.PairAlice)
 	}
 }
 
@@ -526,7 +586,7 @@ func (s *ecdsaKeygenSession) persistAndFinish() {
 	pairs := make(map[string]*DklsPairData, len(s.aliceIterators)+len(s.bobIterators))
 
 	for key, alice := range s.aliceIterators {
-		resultMsg, err := alice.Result(1)
+		resultMsg, err := alice.Result(dklsv2.Version2)
 		if err != nil {
 			s.sendErr(fmt.Errorf("DKLS pair setup %s: Alice.Result: %w", key, err))
 			return
@@ -540,7 +600,7 @@ func (s *ecdsaKeygenSession) persistAndFinish() {
 	}
 
 	for key, bob := range s.bobIterators {
-		resultMsg, err := bob.Result(1)
+		resultMsg, err := bob.Result(dklsv2.Version2)
 		if err != nil {
 			s.sendErr(fmt.Errorf("DKLS pair setup %s: Bob.Result: %w", key, err))
 			return

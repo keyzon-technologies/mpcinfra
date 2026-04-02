@@ -37,7 +37,6 @@ func TestResharing(t *testing.T) {
 		suite.SetupInfrastructure(t)
 		suite.SetupTestNodes(t)
 		suite.RegisterPeers(t)
-		suite.SeedPreParams(t)
 		suite.StartNodes(t)
 		suite.SetupMPCClient(t)
 		suite.LoadConfig()

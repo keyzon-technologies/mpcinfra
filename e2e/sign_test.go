@@ -3,11 +3,11 @@ package e2e
 import (
 	"errors"
 	"fmt"
-	"math/big"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/keyzon-technologies/kryptology/pkg/core/curves"
 	"github.com/keyzon-technologies/mpcinfra/pkg/event"
 	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
 	"github.com/keyzon-technologies/mpcinfra/pkg/types"
@@ -17,16 +17,38 @@ import (
 
 var ErrInvalidSig = errors.New("invalid signature")
 
-// ComposeSignature composes a signature from v, r, s components
+// ComposeSignature composes a 65-byte Ethereum-style signature from v, r, s
+// components. It validates R and S against the secp256k1 curve order using
+// kryptology's curves.K256().
 func ComposeSignature(v, r, s []byte) ([]byte, error) {
-	V := v[0]
-	if !validateSignatureValues(
-		V,
-		new(big.Int).SetBytes(r),
-		new(big.Int).SetBytes(s), false) {
-		return nil, ErrInvalidSig
+	if len(v) == 0 {
+		return nil, fmt.Errorf("%w: empty V", ErrInvalidSig)
 	}
-	// encode the signature in uncompressed format
+	V := v[0]
+	if V != 0 && V != 1 {
+		return nil, fmt.Errorf("%w: V must be 0 or 1, got %d", ErrInvalidSig, V)
+	}
+
+	curve := curves.K256()
+
+	// Validate R is a non-zero scalar within the secp256k1 field order
+	rPadded := padTo32(r)
+	rScalar, err := curve.Scalar.SetBytes(rPadded)
+	if err != nil || rScalar.IsZero() {
+		return nil, fmt.Errorf("%w: invalid R value", ErrInvalidSig)
+	}
+
+	// Validate S is a non-zero scalar within the secp256k1 field order
+	sPadded := padTo32(s)
+	sScalar, err := curve.Scalar.SetBytes(sPadded)
+	if err != nil || sScalar.IsZero() {
+		return nil, fmt.Errorf("%w: invalid S value", ErrInvalidSig)
+	}
+
+	_ = rScalar
+	_ = sScalar
+
+	// Encode the signature in uncompressed format (R‖S‖V)
 	sig := make([]byte, 65)
 	copy(sig[32-len(r):32], r)
 	copy(sig[64-len(s):64], s)
@@ -34,24 +56,15 @@ func ComposeSignature(v, r, s []byte) ([]byte, error) {
 	return sig, nil
 }
 
-// validateSignatureValues verifies whether the signature values are valid
-func validateSignatureValues(v uint8, r, s *big.Int, homestead bool) bool {
-	if r.Cmp(big.NewInt(1)) < 0 || s.Cmp(big.NewInt(1)) < 0 {
-		return false
+// padTo32 left-pads a byte slice to exactly 32 bytes.
+func padTo32(b []byte) []byte {
+	if len(b) >= 32 {
+		return b[len(b)-32:]
 	}
-	// reject upper range of s values (ECDSA malleability)
-	// see discussion in secp256k1/libsecp256k1/include/secp256k1.h
-	if homestead && s.Cmp(secp256k1halfN) > 0 {
-		return false
-	}
-	// Frontier: allow s to be in full N range
-	return r.Cmp(secp256k1N) < 0 && s.Cmp(secp256k1N) < 0 && (v == 0 || v == 1)
+	padded := make([]byte, 32)
+	copy(padded[32-len(b):], b)
+	return padded
 }
-
-var (
-	secp256k1N, _  = new(big.Int).SetString("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
-	secp256k1halfN = new(big.Int).Div(secp256k1N, big.NewInt(2))
-)
 
 func TestSigning(t *testing.T) {
 	suite := NewE2ETestSuite(".")
@@ -94,8 +107,6 @@ func TestSigning(t *testing.T) {
 		t.Log("Starting setupMPCClient...")
 		suite.SetupMPCClient(t)
 		t.Log("setupMPCClient completed")
-
-		suite.SeedPreParams(t)
 
 		t.Log("Starting startNodes...")
 		suite.StartNodes(t)

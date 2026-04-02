@@ -6,11 +6,30 @@ This directory contains end-to-end integration tests for the mpcinfra multi-part
 
 The E2E tests verify that the complete MPC system works correctly by:
 
-1. **Infrastructure Setup**: Using testcontainers to spin up isolated NATS and Consul instances
+1. **Infrastructure Setup**: Docker Compose to spin up isolated NATS and Consul instances
 2. **Node Setup**: Creating 3 test nodes with separate identities and configurations
-3. **Key Generation**: Testing concurrent key generation for multiple wallets
-4. **Consistency Verification**: Ensuring all generated keys are properly stored across all nodes
-5. **Cleanup**: Removing all test artifacts and containers
+3. **Key Generation**: FROST DKG (Ed25519) + DKLS19 pair setup (secp256k1)
+4. **Signing**: DKLS19 pairwise ECDSA signing and FROST threshold EdDSA signing
+5. **Resharing**: DKLS19 key refresh and FROST proactive re-sharing
+6. **Cleanup**: Removing all test artifacts and containers
+
+## Cryptographic Protocols
+
+### ECDSA (secp256k1) - Bitcoin, Ethereum
+
+- **Key Generation**: FROST-style group DKG on secp256k1, then DKLS19 pairwise OT setup
+- **Signing**: DKLS19 2-party threshold signing (Alice/Bob pairs)
+- **Resharing**: DKLS19 key refresh
+
+### EdDSA (Ed25519) - Solana
+
+- **Key Generation**: FROST DKG
+- **Signing**: FROST threshold signing
+- **Resharing**: FROST proactive re-sharing
+
+### Library
+
+All MPC protocols use `github.com/keyzon-technologies/kryptology v1.0.2`.
 
 ## Prerequisites
 
@@ -27,7 +46,6 @@ Before running the tests, ensure you have:
 ```bash
 # Run all E2E tests
 make test
-
 
 # Clean up test artifacts
 make clean
@@ -51,10 +69,15 @@ make clean
 
 ### Files
 
-- `keygen_test.go` - Main test file with the E2E test suite
-- `docker-compose.test.yaml` - Test infrastructure configuration
-- `config.test.yaml` - Test node configuration template
+- `base_test.go` - Core test infrastructure, suite setup, cleanup, DB verification
+- `keygen_test.go` - Key generation tests (FROST DKG + DKLS19 pair setup)
+- `sign_test.go` - Signing tests (ECDSA via DKLS19, EdDSA via FROST)
+- `sign_ckd_test.go` - Signing with HD wallet child key derivation (BIP-44)
+- `reshare_test.go` - Key resharing tests (DKLS19 refresh, FROST re-share)
+- `docker-compose.test.yaml` - Test infrastructure (NATS, Consul)
+- `config.test.yaml.template` - Test node configuration template
 - `setup_test_identities.sh` - Script to set up test node identities
+- `cleanup_test_env.sh` - Standalone cleanup script
 - `Makefile` - Build and test automation
 
 ### Test Flow
@@ -78,18 +101,21 @@ make clean
 
 4. **Test Key Generation**
 
-   - Generates 3 random wallet IDs
-   - Triggers key generation for all wallets simultaneously
-   - Waits for completion (2 minute timeout)
+   - Generates random wallet IDs
+   - Triggers key generation via NATS (runs FROST DKG + DKLS19 setup)
+   - Waits for completion (15 minute timeout)
 
-5. **Verify Consistency**
+5. **Test Signing**
 
-   - Stops all nodes safely
-   - Opens each node's database in read-only mode
-   - Verifies both ECDSA and EdDSA keys exist for each wallet
-   - Ensures all nodes have identical key data
+   - ECDSA: sends transactions via DKLS19 pairwise signing, validates R/S/V components using kryptology secp256k1 curve
+   - EdDSA: sends transactions via FROST signing, validates 64-byte signatures
 
-6. **Cleanup**
+6. **Test Resharing**
+
+   - Triggers key refresh with new threshold/node set
+   - Verifies signing still works with reshared keys
+
+7. **Cleanup**
    - Stops all processes
    - Removes Docker containers
    - Deletes test databases and temporary files
@@ -107,11 +133,6 @@ The tests use different ports to avoid conflicts with running services:
 
 Test nodes use a separate database path: `./test_db/` instead of `./db/`
 
-### Test Credentials
-
-- **Badger Password**: `test_password_123`
-- **Node Names**: `test_node0`, `test_node1`, `test_node2`
-
 ## Troubleshooting
 
 ### Common Issues
@@ -119,7 +140,7 @@ Test nodes use a separate database path: `./test_db/` instead of `./db/`
 1. **Binary not found**
 
    ```
-   ❌ mpcinfra binary not found. Please run 'make' in the root directory first.
+   mpcinfra binary not found in PATH
    ```
 
    **Solution**: Run `make` in the root directory to build the binaries.
@@ -156,58 +177,43 @@ To debug test failures:
    ```
 
 3. **Keep test artifacts** (comment out cleanup in the test):
-
    ```bash
-   # Inspect test databases
    ls -la test_db/
-
-   # Check test node configurations
    cat test_node0/config.yaml
    ```
 
-## Expected Output
+## Test Cleanup and Process Management
 
-A successful test run should show:
+### Automatic Cleanup
 
+- **Pre-test cleanup**: Every test run starts with `CleanupTestEnvironment()` which kills existing MPC processes, stops Docker containers, and removes test artifacts
+- **Post-test cleanup**: Tests use `defer` to ensure cleanup happens even if tests fail
+
+### Manual Cleanup
+
+```bash
+# Option 1: Use the cleanup script
+cd e2e && ./cleanup_test_env.sh
+
+# Option 2: Use the Makefile target
+make clean
+
+# Option 3: Manual cleanup
+pkill -f mpcinfra
+docker compose -f docker-compose.test.yaml down -v --remove-orphans
+rm -rf test_node* logs
 ```
-🚀 Setting up test infrastructure...
-🐳 Starting docker-compose stack...
-⏳ Waiting for services to be ready...
-🔌 Setting up service clients...
-✅ Consul client connected
-✅ NATS client connected
-🔧 Setting up test nodes...
-✅ Test nodes setup complete
-📋 Registering peers in Consul...
-✅ Registered peer test_node0 with ID xxx
-✅ Registered peer test_node1 with ID xxx
-✅ Registered peer test_node2 with ID xxx
-🚀 Starting MPC nodes...
-✅ Started node test_node0 (PID: xxx)
-✅ Started node test_node1 (PID: xxx)
-✅ Started node test_node2 (PID: xxx)
-🔑 Testing key generation...
-📝 Generated wallet IDs: [xxx, xxx, xxx]
-🔐 Triggering key generation for wallet xxx
-⏳ Waiting for key generation to complete...
-✅ Key generation test completed
-🔍 Verifying key consistency across nodes...
-🛑 Stopping MPC nodes...
-🔍 Checking wallet xxx
-✅ Found ECDSA key for wallet xxx in node test_node0 (xxx bytes)
-✅ Found ECDSA key for wallet xxx in node test_node1 (xxx bytes)
-✅ Found ECDSA key for wallet xxx in node test_node2 (xxx bytes)
-✅ Found EdDSA key for wallet xxx in node test_node0 (xxx bytes)
-✅ Found EdDSA key for wallet xxx in node test_node1 (xxx bytes)
-✅ Found EdDSA key for wallet xxx in node test_node2 (xxx bytes)
-✅ Key consistency verification completed
-🧹 Cleaning up test environment...
-✅ Cleanup completed
-```
+
+### Common Issues and Solutions
+
+| Issue                                | Cause                           | Solution                        |
+| ------------------------------------ | ------------------------------- | ------------------------------- |
+| "Failed to verify initiator message" | Multiple MPC instances running  | Run cleanup script              |
+| "Port already in use"                | Docker containers still running | `docker compose down -v`        |
+| "Database locked"                    | Previous test didn't clean up   | Remove `test_node*` directories |
+| Test hangs during setup              | Leftover processes interfering  | Kill all `mpcinfra` processes   |
 
 ## Integration with CI/CD
-
-To integrate with CI/CD pipelines:
 
 ```yaml
 # Example GitHub Actions step
@@ -217,101 +223,3 @@ To integrate with CI/CD pipelines:
     cd e2e
     make test
 ```
-
-The tests are designed to be:
-
-- **Isolated**: No dependencies on external services
-- **Deterministic**: Consistent results across runs
-- **Self-contained**: All setup and cleanup handled automatically
-- **Fast**: Complete in under 10 minutes
-
-## Test Cleanup and Process Management
-
-### Problem: Test Process Interference
-
-E2E tests can sometimes leave behind running processes that interfere with subsequent test runs. This can cause signature verification errors and other unexpected failures.
-
-### Solution: Comprehensive Cleanup
-
-The test suite now includes automatic cleanup mechanisms to prevent process interference:
-
-#### 1. Automatic Cleanup in Tests
-
-- **Pre-test cleanup**: Every test run starts with `CleanupTestEnvironment()` which:
-  - Kills any existing MPC processes
-  - Stops Docker containers
-  - Removes test artifacts
-- **Post-test cleanup**: Tests use `defer` to ensure cleanup happens even if tests fail
-
-#### 2. Manual Cleanup Options
-
-If you need to manually clean up the test environment:
-
-```bash
-# Option 1: Use the cleanup script directly
-cd e2e
-./cleanup_test_env.sh
-
-# Option 2: Use the Makefile target
-make cleanup-test-env
-
-# Option 3: Manual cleanup commands
-cd e2e
-# Kill MPC processes
-pgrep -f "mpcinfra" | xargs kill -TERM
-# Stop Docker containers
-docker compose -f docker-compose.test.yaml down -v --remove-orphans
-# Remove test artifacts
-rm -rf test_node* *.log
-```
-
-#### 3. Troubleshooting Process Issues
-
-If you encounter signature verification errors or other mysterious test failures:
-
-1. **Check for running processes**:
-
-   ```bash
-   ps aux | grep mpcinfra
-   ```
-
-2. **Kill any found processes**:
-
-   ```bash
-   pkill -f mpcinfra
-   ```
-
-3. **Clean up completely**:
-
-   ```bash
-   make cleanup-test-env
-   ```
-
-4. **Run tests again**:
-   ```bash
-   go test -v -run TestKeyGeneration
-   ```
-
-### Best Practices
-
-1. **Always clean up before running tests** - The test suite does this automatically
-2. **Use the cleanup script** if you interrupt tests manually (Ctrl+C)
-3. **Check for leftover processes** if you see unexpected errors
-4. **Don't run multiple test instances** simultaneously in the same directory
-
-### Test Structure
-
-- `base_test.go` - Core test infrastructure and cleanup functions
-- `keygen_test.go` - Key generation tests
-- `cleanup_test_env.sh` - Standalone cleanup script
-- `docker-compose.test.yaml` - Test infrastructure (NATS, Consul)
-
-### Common Issues and Solutions
-
-| Issue                                | Cause                           | Solution                        |
-| ------------------------------------ | ------------------------------- | ------------------------------- |
-| "Failed to verify initiator message" | Multiple MPC instances running  | Run cleanup script              |
-| "Port already in use"                | Docker containers still running | `docker compose down -v`        |
-| "Database locked"                    | Previous test didn't clean up   | Remove `test_node*` directories |
-| Test hangs during setup              | Leftover processes interfering  | Kill all `mpcinfra` processes     |
-

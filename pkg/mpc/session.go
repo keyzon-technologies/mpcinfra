@@ -77,10 +77,11 @@ type session struct {
 	topicComposer *TopicComposer
 	composeKey    KeyComposerFn
 
-	ErrCh    chan error
-	doneCh   chan struct{}
-	doneOnce sync.Once
-	mu       sync.Mutex
+	ErrCh     chan error
+	doneCh    chan struct{}
+	doneOnce  sync.Once
+	closeOnce sync.Once
+	mu        sync.Mutex
 
 	pubkeyBytes   []byte
 	sessionType   SessionType
@@ -250,7 +251,9 @@ func (s *session) subscribeBroadcastAsync(onMpcMsg func(*types.MpcMsg)) {
 			s.sendErr(fmt.Errorf("failed to subscribe to broadcast topic %s: %w", topic, err))
 			return
 		}
+		s.mu.Lock()
 		s.broadcastSub = sub
+		s.mu.Unlock()
 	}()
 }
 
@@ -320,21 +323,26 @@ func (s *session) WaitForPeersReady() error {
 func (s *session) Close() error {
 	s.Stop()
 
-	if s.barrierSub != nil {
-		if err := s.barrierSub.Unsubscribe(); err != nil {
-			logger.Error("Failed to unsubscribe barrier", err)
+	s.closeOnce.Do(func() {
+		if s.barrierSub != nil {
+			if err := s.barrierSub.Unsubscribe(); err != nil {
+				logger.Error("Failed to unsubscribe barrier", err)
+			}
 		}
-	}
-	if s.broadcastSub != nil {
-		if err := s.broadcastSub.Unsubscribe(); err != nil {
-			logger.Error("Failed to unsubscribe broadcast", err)
+		s.mu.Lock()
+		broadcastSub := s.broadcastSub
+		s.mu.Unlock()
+		if broadcastSub != nil {
+			if err := broadcastSub.Unsubscribe(); err != nil {
+				logger.Error("Failed to unsubscribe broadcast", err)
+			}
 		}
-	}
-	for _, sub := range s.directSubs {
-		if err := sub.Unsubscribe(); err != nil {
-			logger.Error("Failed to unsubscribe direct", err)
+		for _, sub := range s.directSubs {
+			if err := sub.Unsubscribe(); err != nil {
+				logger.Error("Failed to unsubscribe direct", err)
+			}
 		}
-	}
+	})
 	return nil
 }
 
