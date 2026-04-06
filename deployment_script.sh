@@ -17,6 +17,7 @@ NATS_PASSWORD=$(decrypt_secret "$PASS" ~/.password-store/apex-nats-password.gpg)
 CONSUL_PASSWORD=$(decrypt_secret "$PASS" ~/.password-store/apex-consul-password.gpg)
 CONSUL_TOKEN=$(decrypt_secret "$PASS" ~/.password-store/apex-consul-token.gpg)
 BADGER_PASSWORD=$(decrypt_secret "$PASS" ~/.password-store/mpcinfra-badger-password.gpg)
+BADGER_BACKUP_PASSWORD=$(decrypt_secret "$PASS" ~/.password-store/mpcinfra-badger-backup-password.gpg)
 
 # Prompt for command
 read -p "Enter the command to execute: " user_command
@@ -26,8 +27,9 @@ env NATS_PASSWORD="$NATS_PASSWORD" \
     CONSUL_PASSWORD="$CONSUL_PASSWORD" \
     CONSUL_TOKEN="$CONSUL_TOKEN" \
     BADGER_PASSWORD="$BADGER_PASSWORD" \
+    BADGER_BACKUP_PASSWORD="$BADGER_BACKUP_PASSWORD" \
     ENVIRONMENT=production \
     $user_command
 
 # Clear sensitive variables
-unset PASS NATS_PASSWORD CONSUL_PASSWORD CONSUL_TOKEN BADGER_PASSWORD
+unset PASS NATS_PASSWORD CONSUL_PASSWORD CONSUL_TOKEN BADGER_PASSWORD BADGER_BACKUP_PASSWORD
