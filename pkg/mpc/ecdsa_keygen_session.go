@@ -100,22 +100,6 @@ func newECDSAKeygenSession(
 	resultQueue messaging.MessageQueue,
 	identityStore identity.Store,
 ) *ecdsaKeygenSession {
-	println("")
-	println("")
-	println("")
-	println("")
-	println("")
-
-	println("La eleee")
-	println(nodeID)
-	println(peerIDs)
-
-	println("")
-	println("")
-	println("")
-	println("")
-	println("")
-
 	return &ecdsaKeygenSession{
 		session: session{
 			walletID:      walletID,
@@ -232,15 +216,7 @@ func (s *ecdsaKeygenSession) GenerateKey(done func()) {
 func (s *ecdsaKeygenSession) runFrostRound1() {
 	bcast, p2pSend, err := s.frostParticipant.Round1(nil)
 	if err != nil {
-		println("")
-		println("")
-		println("")
-
 		s.sendErr(fmt.Errorf("ECDSA keygen: FROST Round1: %w", err))
-
-		println("")
-		println("")
-		println("")
 		return
 	}
 
@@ -269,15 +245,7 @@ func (s *ecdsaKeygenSession) runFrostRound1() {
 	for peerParticipantID, share := range p2pSend {
 		shareBytes, err := json.Marshal(share)
 		if err != nil {
-			println("")
-			println("")
-			println("")
-
 			s.sendErr(fmt.Errorf("ECDSA keygen: marshal FROST p2p share: %w", err))
-
-			println("")
-			println("")
-			println("")
 			return
 		}
 		toNodeID := s.nodeIDOf(peerParticipantID)
@@ -495,6 +463,7 @@ func (s *ecdsaKeygenSession) sendDklsIteratorMsg(
 	key, aliceNodeID, bobNodeID string,
 	iter interface {
 		Next(*protocol.Message) (*protocol.Message, error)
+		Complete() bool
 	},
 	input *protocol.Message,
 	toNodeID string,
@@ -527,6 +496,16 @@ func (s *ecdsaKeygenSession) sendDklsIteratorMsg(
 		ToNodeID:   toNodeID,
 		Payload:    replyBytes,
 	})
+
+	// The DKLS19 DKG has 10 rounds (5 per side). Bob's 5th step (Round9/OT openings)
+	// produces a non-nil reply sent to Alice, but Bob has no further steps to execute.
+	// Alice's 5th step (Round10/OT verify) returns nil, marking Alice's side complete.
+	// Since Alice sends nothing back after Round10, Bob would stall waiting forever.
+	// We detect this by checking Complete() after sending: if the iterator is exhausted,
+	// the peer will not send another message, so we mark our pair complete here.
+	if iter.Complete() {
+		s.markPairComplete(key)
+	}
 }
 
 func (s *ecdsaKeygenSession) handleDklsPairMsg(msg *types.MpcMsg) {

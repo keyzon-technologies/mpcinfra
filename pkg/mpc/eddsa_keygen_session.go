@@ -47,6 +47,7 @@ type eddsaKeygenSession struct {
 	frostR2Bcasts    map[uint32]*frostdkg.Round2Bcast
 	frostMu          sync.Mutex
 	frostR2Started   atomic.Bool
+	persistOnce      sync.Once // guards persistAndFinish from running more than once
 
 	done func()
 
@@ -260,7 +261,7 @@ func (s *eddsaKeygenSession) handleFrostMsg(msg *types.MpcMsg) {
 		ready := len(s.frostR2Bcasts) == len(s.session.peerIDs)
 		s.frostMu.Unlock()
 		if ready {
-			go s.persistAndFinish()
+			s.persistOnce.Do(func() { go s.persistAndFinish() })
 		}
 	}
 }
@@ -315,7 +316,7 @@ func (s *eddsaKeygenSession) runFrostRound2() {
 	})
 
 	if ready {
-		go s.persistAndFinish()
+		s.persistOnce.Do(func() { go s.persistAndFinish() })
 	}
 }
 
