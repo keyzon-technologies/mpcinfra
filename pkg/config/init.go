@@ -17,10 +17,11 @@ type AppConfig struct {
 	NATs   *NATsConfig   `mapstructure:"nats"`
 	R2     *R2Config     `mapstructure:"r2"`
 
-	Environment          string `mapstructure:"environment"`
-	BadgerPassword       string `mapstructure:"badger_password"`
-	BadgerBackupPassword string `mapstructure:"badger_backup_password"`
-	ChainCodeHex         string `mapstructure:"chain_code"`
+	Environment           string `mapstructure:"environment"`
+	BadgerPassword        string `mapstructure:"badger_password"`
+	BadgerBackupPassword  string `mapstructure:"badger_backup_password"`
+	ConsulBackupPassword  string `mapstructure:"consul_backup_password"`
+	ChainCodeHex          string `mapstructure:"chain_code"`
 }
 
 // R2Config holds Cloudflare R2 credentials for off-site backup uploads.
@@ -106,6 +107,7 @@ func InitViperConfig() {
 	viper.BindEnv("environment", "ENVIRONMENT")
 	viper.BindEnv("badger_password", "BADGER_PASSWORD")
 	viper.BindEnv("badger_backup_password", "BADGER_BACKUP_PASSWORD")
+	viper.BindEnv("consul_backup_password", "CONSUL_BACKUP_PASSWORD")
 	viper.BindEnv("chain_code", "CHAIN_CODE")
 	viper.BindEnv("consul.address", "CONSUL_ADDRESS")
 	viper.BindEnv("consul.username", "CONSUL_USERNAME")

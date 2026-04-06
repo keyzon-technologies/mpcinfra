@@ -6,7 +6,6 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/keyzon-technologies/mpcinfra/pkg/config"
-	"github.com/keyzon-technologies/mpcinfra/pkg/constant"
 	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
 	"github.com/spf13/viper"
 )
@@ -21,40 +20,19 @@ type ConsulKV interface {
 func GetConsulClient(environment string) *api.Client {
 	cfg := api.DefaultConfig()
 	cfg.Address = viper.GetString("consul.address")
+	cfg.Token = viper.GetString("consul.token")
 	cfg.WaitTime = 10 * time.Second
-
-	if environment == constant.EnvProduction {
-		cfg.Token = viper.GetString("consul.token")
-		username := viper.GetString("consul.username")
-		password := viper.GetString("consul.password")
-		if username != "" || password != "" {
-			cfg.HttpAuth = &api.HttpBasicAuth{
-				Username: username,
-				Password: password,
-			}
-		}
-
-		// TLS — load from ConsulTLSConfig or fall back to default cert paths
-		tlsCfg := loadConsulTLSConfig()
-		if tlsCfg.CAFile != "" || tlsCfg.CertFile != "" {
-			cfg.TLSConfig = *tlsCfg
-		}
-	}
 
 	tokenLength := 0
 	if cfg.Token != "" {
 		tokenLength = len(cfg.Token)
 	}
-	hasAuth := cfg.HttpAuth != nil
-	hasTLS := cfg.TLSConfig.CAFile != "" || cfg.TLSConfig.CertFile != ""
 
 	logger.Info("Consul config",
 		"environment", environment,
 		"address", cfg.Address,
 		"wait_time", cfg.WaitTime,
 		"token_length", tokenLength,
-		"http_auth", hasAuth,
-		"tls", hasTLS,
 	)
 
 	client, err := api.NewClient(cfg)

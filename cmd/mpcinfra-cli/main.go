@@ -202,6 +202,60 @@ func main() {
 				Action: recoverDatabase,
 			},
 			{
+				Name:  "recover-badger",
+				Usage: "Restore Badger database from encrypted backups in R2",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "node",
+						Aliases:  []string{"n"},
+						Usage:    "Node name (used to locate backups in R2)",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "recovery-path",
+						Aliases:  []string{"r"},
+						Usage:    "Target path for the restored database",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "environment",
+						Aliases: []string{"e"},
+						Usage:   "Environment (development, production)",
+						Value:   "production",
+					},
+					&cli.BoolFlag{
+						Name:    "force",
+						Aliases: []string{"f"},
+						Usage:   "Skip confirmation prompt and overwrite recovery path if exists",
+					},
+				},
+				Action: recoverBadgerFromR2,
+			},
+			{
+				Name:  "recover-consul",
+				Usage: "Restore Consul KV data from the latest encrypted backup in R2",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "node",
+						Aliases:  []string{"n"},
+						Usage:    "Node name (used to locate backups in R2)",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:    "environment",
+						Aliases: []string{"e"},
+						Usage:   "Environment (development, production)",
+						Value:   "production",
+					},
+					&cli.BoolFlag{
+						Name:    "force",
+						Aliases: []string{"f"},
+						Usage:   "Skip confirmation prompt",
+					},
+				},
+				Action: recoverConsul,
+			},
+			{
 				Name:  "version",
 				Usage: "Display detailed version information",
 				Action: func(ctx context.Context, c *cli.Command) error {

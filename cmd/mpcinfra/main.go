@@ -171,6 +171,34 @@ func runNode(ctx context.Context, c *cli.Command) error {
 		backupPeriodSeconds := viper.GetInt("backup_period_seconds")
 		stopBackup := StartPeriodicBackup(ctx, badgerKV, backupPeriodSeconds)
 		defer stopBackup()
+
+		consulBackupArgs := []infra.ConsulBackupUploader{}
+		if appConfig.R2.IsEnabled() {
+			r2Prefix := appConfig.R2.Prefix
+			if r2Prefix == "" {
+				r2Prefix = nodeName + "/"
+			}
+			r2Uploader, err := kvstore.NewR2Uploader(
+				appConfig.R2.AccountID,
+				appConfig.R2.AccessKeyID,
+				appConfig.R2.SecretAccessKey,
+				appConfig.R2.Bucket,
+				r2Prefix+"consul/",
+			)
+			if err != nil {
+				logger.Fatal("Failed to initialize R2 uploader for Consul backup", err)
+			}
+			consulBackupArgs = append(consulBackupArgs, r2Uploader)
+		}
+		consulBackupExec := infra.NewConsulBackupExecutor(
+			nodeName,
+			consulClient.KV(),
+			encryption.DeriveKey(appConfig.ConsulBackupPassword, "mpcinfra-consul-backup"),
+			viper.GetString("backup_dir"),
+			consulBackupArgs...,
+		)
+		stopConsulBackup := infra.StartPeriodicConsulBackup(ctx, consulBackupExec, backupPeriodSeconds)
+		defer stopConsulBackup()
 	}
 
 	identityStore, err := identity.NewFileStore("identity", nodeName, decryptPrivateKey, agePasswordFile)
@@ -474,6 +502,9 @@ func checkRequiredConfigValues(appConfig *config.AppConfig) {
 	}
 	if viper.GetString("badger_backup_password") == "" {
 		logger.Fatal("Badger backup password is required (set BADGER_BACKUP_PASSWORD env var)", nil)
+	}
+	if viper.GetString("consul_backup_password") == "" {
+		logger.Fatal("Consul backup password is required (set CONSUL_BACKUP_PASSWORD env var)", nil)
 	}
 
 	if viper.GetString("event_initiator_pubkey") == "" {

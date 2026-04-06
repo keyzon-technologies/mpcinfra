@@ -61,3 +61,39 @@ func (u *R2Uploader) Upload(ctx context.Context, filename string, data []byte) e
 	}
 	return nil
 }
+
+// ListObjects returns all object keys under the uploader's prefix, sorted ascending.
+func (u *R2Uploader) ListObjects(ctx context.Context) ([]string, error) {
+	resp, err := u.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(u.bucket),
+		Prefix: aws.String(u.prefix),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("r2 list %q: %w", u.prefix, err)
+	}
+	keys := make([]string, 0, len(resp.Contents))
+	for _, obj := range resp.Contents {
+		if obj.Key != nil {
+			keys = append(keys, *obj.Key)
+		}
+	}
+	return keys, nil
+}
+
+// Download retrieves a single object by its full key and returns its contents.
+func (u *R2Uploader) Download(ctx context.Context, key string) ([]byte, error) {
+	resp, err := u.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(u.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("r2 download %q: %w", key, err)
+	}
+	defer resp.Body.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		return nil, fmt.Errorf("r2 read %q: %w", key, err)
+	}
+	return buf.Bytes(), nil
+}
