@@ -30,7 +30,7 @@ func main() {
 
 	flag.Parse()
 
-	config.InitViperConfig("")
+	config.InitViperConfig()
 	logger.Init(environment, false)
 
 	// KMS signer only supports P256

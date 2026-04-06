@@ -49,7 +49,7 @@ func main() {
 	fmt.Println()
 
 	const environment = "dev"
-	config.InitViperConfig("")
+	config.InitViperConfig()
 	logger.Init(environment, true)
 
 	algorithm := viper.GetString("event_initiator_algorithm")

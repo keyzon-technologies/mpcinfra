@@ -23,7 +23,7 @@ var requiredAuthorizers = []string{"authorizer1", "authorizer2"}
 
 func main() {
 	const environment = "dev"
-	config.InitViperConfig("")
+	config.InitViperConfig()
 	logger.Init(environment, true)
 
 	algorithm := viper.GetString("event_initiator_algorithm")

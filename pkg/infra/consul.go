@@ -1,9 +1,11 @@
 package infra
 
 import (
+	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/keyzon-technologies/mpcinfra/pkg/config"
 	"github.com/keyzon-technologies/mpcinfra/pkg/constant"
 	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
 	"github.com/spf13/viper"
@@ -17,37 +19,45 @@ type ConsulKV interface {
 }
 
 func GetConsulClient(environment string) *api.Client {
-	config := api.DefaultConfig()
+	cfg := api.DefaultConfig()
+	cfg.Address = viper.GetString("consul.address")
+	cfg.WaitTime = 10 * time.Second
+
 	if environment == constant.EnvProduction {
-		config.Token = viper.GetString("consul.token")
+		cfg.Token = viper.GetString("consul.token")
 		username := viper.GetString("consul.username")
 		password := viper.GetString("consul.password")
 		if username != "" || password != "" {
-			config.HttpAuth = &api.HttpBasicAuth{
+			cfg.HttpAuth = &api.HttpBasicAuth{
 				Username: username,
 				Password: password,
 			}
 		}
-	}
 
-	config.Address = viper.GetString("consul.address")
-	config.WaitTime = 10 * time.Second
+		// TLS — load from ConsulTLSConfig or fall back to default cert paths
+		tlsCfg := loadConsulTLSConfig()
+		if tlsCfg.CAFile != "" || tlsCfg.CertFile != "" {
+			cfg.TLSConfig = *tlsCfg
+		}
+	}
 
 	tokenLength := 0
-	if config.Token != "" {
-		tokenLength = len(config.Token)
+	if cfg.Token != "" {
+		tokenLength = len(cfg.Token)
 	}
+	hasAuth := cfg.HttpAuth != nil
+	hasTLS := cfg.TLSConfig.CAFile != "" || cfg.TLSConfig.CertFile != ""
 
 	logger.Info("Consul config",
 		"environment", environment,
-		"address", config.Address,
-		"wait_time", config.WaitTime,
+		"address", cfg.Address,
+		"wait_time", cfg.WaitTime,
 		"token_length", tokenLength,
-		"http_auth", config.HttpAuth,
+		"http_auth", hasAuth,
+		"tls", hasTLS,
 	)
 
-	// Ping the Consul server to verify connectivity
-	client, err := api.NewClient(config)
+	client, err := api.NewClient(cfg)
 	if err != nil {
 		logger.Fatal("Failed to create consul client", err)
 	}
@@ -58,4 +68,35 @@ func GetConsulClient(environment string) *api.Client {
 	}
 
 	return client
+}
+
+// loadConsulTLSConfig reads TLS paths from config/env, falling back to default cert paths.
+func loadConsulTLSConfig() *api.TLSConfig {
+	var tlsCfg config.ConsulTLSConfig
+	if v := viper.GetString("consul.tls.client_cert"); v != "" {
+		tlsCfg.ClientCert = v
+	}
+	if v := viper.GetString("consul.tls.client_key"); v != "" {
+		tlsCfg.ClientKey = v
+	}
+	if v := viper.GetString("consul.tls.ca_cert"); v != "" {
+		tlsCfg.CACert = v
+	}
+
+	// Fall back to default paths if any field is missing
+	if tlsCfg.ClientCert == "" {
+		tlsCfg.ClientCert = filepath.Join(".", "certs", "consul-client-cert.pem")
+	}
+	if tlsCfg.ClientKey == "" {
+		tlsCfg.ClientKey = filepath.Join(".", "certs", "consul-client-key.pem")
+	}
+	if tlsCfg.CACert == "" {
+		tlsCfg.CACert = filepath.Join(".", "certs", "consul-rootCA.pem")
+	}
+
+	return &api.TLSConfig{
+		CertFile: tlsCfg.ClientCert,
+		KeyFile:  tlsCfg.ClientKey,
+		CAFile:   tlsCfg.CACert,
+	}
 }

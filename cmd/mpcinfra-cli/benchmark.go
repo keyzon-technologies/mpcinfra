@@ -201,13 +201,12 @@ func reshareBenchmarkCommand() *cli.Command {
 }
 
 func createMPCClient(cmd *cli.Command) (client.MPCClient, error) {
-	configPath := cmd.String("config")
 	keyPath := cmd.String("key-path")
 	promptPassword := cmd.Bool("prompt-password")
 	debug := cmd.Bool("debug")
 
 	// Initialize configuration
-	config.InitViperConfig(configPath)
+	config.InitViperConfig()
 	appConfig := config.LoadConfig()
 	environment := appConfig.Environment
 

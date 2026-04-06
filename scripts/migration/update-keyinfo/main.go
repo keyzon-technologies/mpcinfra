@@ -12,7 +12,7 @@ import (
 
 // script to add key type prefix ecdsa for existing keys
 func main() {
-	config.InitViperConfig("")
+	config.InitViperConfig()
 	logger.Init("production", false)
 	appConfig := config.LoadConfig()
 	logger.Info("App config", "config", appConfig)

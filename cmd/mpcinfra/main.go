@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/keyzon-technologies/mpcinfra/pkg/config"
 	"github.com/keyzon-technologies/mpcinfra/pkg/constant"
+	"github.com/keyzon-technologies/mpcinfra/pkg/encryption"
 	"github.com/keyzon-technologies/mpcinfra/pkg/event"
 	"github.com/keyzon-technologies/mpcinfra/pkg/eventconsumer"
 	"github.com/keyzon-technologies/mpcinfra/pkg/healthcheck"
@@ -62,11 +63,6 @@ func main() {
 						Aliases:  []string{"n"},
 						Usage:    "Node name",
 						Required: true,
-					},
-					&cli.StringFlag{
-						Name:    "config",
-						Aliases: []string{"c"},
-						Usage:   "Path to configuration file",
 					},
 					&cli.BoolFlag{
 						Name:    "decrypt-private-key",
@@ -120,7 +116,6 @@ func main() {
 
 func runNode(ctx context.Context, c *cli.Command) error {
 	nodeName := c.String("name")
-	configPath := c.String("config")
 	decryptPrivateKey := c.Bool("decrypt-private-key")
 	usePrompts := c.Bool("prompt-credentials")
 	passwordFile := c.String("password-file")
@@ -128,7 +123,7 @@ func runNode(ctx context.Context, c *cli.Command) error {
 	debug := c.Bool("debug")
 
 	viper.SetDefault("backup_enabled", true)
-	config.InitViperConfig(configPath)
+	config.InitViperConfig()
 	environment := viper.GetString("environment")
 	logger.Init(environment, debug)
 
@@ -477,6 +472,9 @@ func checkRequiredConfigValues(appConfig *config.AppConfig) {
 	if viper.GetString("badger_password") == "" {
 		logger.Fatal("Badger password is required", nil)
 	}
+	if viper.GetString("badger_backup_password") == "" {
+		logger.Fatal("Badger backup password is required (set BADGER_BACKUP_PASSWORD env var)", nil)
+	}
 
 	if viper.GetString("event_initiator_pubkey") == "" {
 		logger.Fatal("Event initiator public key is required", nil)
@@ -484,7 +482,7 @@ func checkRequiredConfigValues(appConfig *config.AppConfig) {
 
 	chainCode := strings.TrimSpace(viper.GetString("chain_code"))
 	if chainCode == "" {
-		logger.Fatal("chain_code is required in config.yaml", nil)
+		logger.Fatal("chain_code is required (set CHAIN_CODE env var)", nil)
 	}
 	if len(chainCode) != 64 { // 32 bytes hex
 		logger.Fatal("chain_code must be 32-byte hex (64 chars)", nil)
@@ -551,10 +549,29 @@ func NewBadgerKV(nodeName, nodeID string, appConfig *config.AppConfig) *kvstore.
 	// Create BadgerConfig struct
 	config := kvstore.BadgerConfig{
 		NodeID:              nodeName,
-		EncryptionKey:       []byte(appConfig.BadgerPassword),
-		BackupEncryptionKey: []byte(appConfig.BadgerPassword), // Using same key for backup encryption
+		EncryptionKey:       encryption.DeriveKey(appConfig.BadgerPassword, "mpcinfra-badger-db"),
+		BackupEncryptionKey: encryption.DeriveKey(appConfig.BadgerBackupPassword, "mpcinfra-badger-backup"),
 		BackupDir:           backupDir,
 		DBPath:              dbPath,
+	}
+
+	if appConfig.R2.IsEnabled() {
+		r2Prefix := appConfig.R2.Prefix
+		if r2Prefix == "" {
+			r2Prefix = nodeName + "/"
+		}
+		r2Uploader, err := kvstore.NewR2Uploader(
+			appConfig.R2.AccountID,
+			appConfig.R2.AccessKeyID,
+			appConfig.R2.SecretAccessKey,
+			appConfig.R2.Bucket,
+			r2Prefix,
+		)
+		if err != nil {
+			logger.Fatal("Failed to initialize R2 backup uploader", err)
+		}
+		config.Uploader = r2Uploader
+		logger.Info("R2 remote backup enabled", "bucket", appConfig.R2.Bucket, "prefix", r2Prefix)
 	}
 
 	badgerKv, err := kvstore.NewBadgerKVStore(config)

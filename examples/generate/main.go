@@ -28,7 +28,7 @@ func main() {
 
 	flag.Parse()
 
-	config.InitViperConfig("")
+	config.InitViperConfig()
 	logger.Init(environment, false)
 
 	algorithm := viper.GetString("event_initiator_algorithm")
