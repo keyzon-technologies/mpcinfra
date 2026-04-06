@@ -25,6 +25,7 @@ type BadgerConfig struct {
 	BackupEncryptionKey []byte
 	BackupDir           string
 	DBPath              string
+	Uploader            BackupUploader // optional off-site backup uploader (e.g. R2)
 }
 
 // NewBadgerKVStore creates a new BadgerKVStore instance.
@@ -45,6 +46,7 @@ func NewBadgerKVStore(config BadgerConfig) (*BadgerKVStore, error) {
 		WithSyncWrites(true).
 		WithVerifyValueChecksum(true). // validate every value-log entry's checksum on read, surfacing corruption instead of masking it
 		WithCompactL0OnClose(true).    // compacts level-0 SSTables on shutdown, reducing startup work and avoiding stalls on open
+		WithValueLogFileSize(128 << 20). // 128 MB per vlog file instead of the 2 GB default
 		WithLogger(newQuietBadgerLogger())
 
 	db, err := badger.Open(opts)
@@ -59,6 +61,7 @@ func NewBadgerKVStore(config BadgerConfig) (*BadgerKVStore, error) {
 		db,
 		config.BackupEncryptionKey,
 		config.BackupDir,
+		config.Uploader,
 	)
 
 	return &BadgerKVStore{DB: db, BackupExecutor: backupExecutor}, nil

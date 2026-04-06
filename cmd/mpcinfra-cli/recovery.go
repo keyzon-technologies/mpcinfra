@@ -6,6 +6,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/keyzon-technologies/mpcinfra/pkg/encryption"
 	"github.com/keyzon-technologies/mpcinfra/pkg/kvstore"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
@@ -25,18 +26,31 @@ func recoverDatabase(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("recovery path already exists: %s (use --force to overwrite)", recoveryPath)
 	}
 
-	// Prompt for encryption key
-	var key []byte
-	fmt.Print("Enter backup encryption key: ")
-	keyBytes, err := term.ReadPassword(int(syscall.Stdin))
+	// Prompt for backup encryption password
+	fmt.Print("Enter backup password (BADGER_BACKUP_PASSWORD): ")
+	backupPassBytes, err := term.ReadPassword(int(syscall.Stdin))
 	if err != nil {
-		return fmt.Errorf("failed to read encryption key: %w", err)
+		return fmt.Errorf("failed to read backup password: %w", err)
 	}
-	fmt.Println() // Add newline after password input
-	key = keyBytes
-	if len(key) == 0 {
-		return fmt.Errorf("encryption key cannot be empty")
+	fmt.Println()
+	if len(backupPassBytes) == 0 {
+		return fmt.Errorf("backup password cannot be empty")
 	}
+
+	// Prompt for DB encryption password (used to open the restored database)
+	fmt.Print("Enter DB password (BADGER_PASSWORD): ")
+	dbPassBytes, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return fmt.Errorf("failed to read DB password: %w", err)
+	}
+	fmt.Println()
+	if len(dbPassBytes) == 0 {
+		return fmt.Errorf("DB password cannot be empty")
+	}
+
+	// Derive keys using the same KDF + contexts used during backup creation.
+	backupKey := encryption.DeriveKey(string(backupPassBytes), "mpcinfra-badger-backup")
+	dbKey := encryption.DeriveKey(string(dbPassBytes), "mpcinfra-badger-db")
 
 	// Remove existing recovery path if force flag is set
 	if force {
@@ -49,11 +63,10 @@ func recoverDatabase(ctx context.Context, c *cli.Command) error {
 	fmt.Printf("Backup directory: %s\n", backupDir)
 	fmt.Printf("Recovery path: %s\n", recoveryPath)
 
-	// Create a temporary backup executor to access the backup files
-	tempExecutor := kvstore.NewBadgerBackupExecutor("temp", nil, key, backupDir)
+	// backupKey decrypts the AES-GCM backup files; dbKey encrypts the restored BadgerDB.
+	tempExecutor := kvstore.NewBadgerBackupExecutor("temp", nil, backupKey, backupDir)
 
-	// Perform the recovery using the existing method with specified recovery path
-	if err := tempExecutor.RestoreAllBackupsEncrypted(recoveryPath, key); err != nil {
+	if err := tempExecutor.RestoreAllBackupsEncrypted(recoveryPath, dbKey); err != nil {
 		return fmt.Errorf("recovery failed: %w", err)
 	}
 

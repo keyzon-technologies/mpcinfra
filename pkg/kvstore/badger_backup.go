@@ -2,6 +2,7 @@ package kvstore
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -19,6 +20,12 @@ import (
 	"github.com/keyzon-technologies/mpcinfra/pkg/encryption"
 	"github.com/rs/zerolog/log"
 )
+
+// BackupUploader is an optional interface for pushing encrypted backup files to remote storage.
+// Implementations receive the filename and the full encrypted file content (magic + meta + ciphertext).
+type BackupUploader interface {
+	Upload(ctx context.Context, filename string, data []byte) error
+}
 
 const (
 	magic            = "mpcinfra_BACKUP"
@@ -46,14 +53,18 @@ type badgerBackupExecutor struct {
 	DB                  *badger.DB
 	BackupEncryptionKey []byte
 	BackupDir           string
+	Uploader            BackupUploader // optional; if set, uploads each backup file after local write
 }
 
-// NewBadgerBackupExecutor creates a new backup executor. If backupDir is empty, uses ./backups
+// NewBadgerBackupExecutor creates a new backup executor. If backupDir is empty, uses ./backups.
+// An optional BackupUploader can be provided as the last argument; if supplied, each backup file
+// is uploaded to remote storage after being written locally.
 func NewBadgerBackupExecutor(
 	nodeID string,
 	db *badger.DB,
 	backupEncryptionKey []byte,
 	backupDir string,
+	uploader ...BackupUploader,
 ) *badgerBackupExecutor {
 	if backupDir == "" {
 		backupDir = defaultBackupDir
@@ -61,12 +72,16 @@ func NewBadgerBackupExecutor(
 	if err := os.MkdirAll(backupDir, 0700); err != nil {
 		panic(fmt.Errorf("failed to create backup directory: %w", err))
 	}
-	return &badgerBackupExecutor{
+	exe := &badgerBackupExecutor{
 		NodeID:              nodeID,
 		DB:                  db,
 		BackupEncryptionKey: backupEncryptionKey,
 		BackupDir:           backupDir,
 	}
+	if len(uploader) > 0 {
+		exe.Uploader = uploader[0]
+	}
+	return exe
 }
 
 func (b *badgerBackupExecutor) Execute() error {
@@ -108,29 +123,26 @@ func (b *badgerBackupExecutor) Execute() error {
 	}
 
 	metaJSON, _ := json.Marshal(meta)
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if _, err := f.Write([]byte(magic)); err != nil {
-		return err
-	}
 
 	metaLen := len(metaJSON)
 	if metaLen > math.MaxUint32 {
 		return fmt.Errorf("metaJSON too large")
 	}
 
-	if err := binary.Write(f, binary.BigEndian, uint32(metaLen)); err != nil {
+	// Build the full file content in memory so we can write to disk and upload from the same buffer.
+	var fileBuf bytes.Buffer
+	fileBuf.Write([]byte(magic))
+	if err := binary.Write(&fileBuf, binary.BigEndian, uint32(metaLen)); err != nil {
 		return err
 	}
-	if _, err := f.Write(metaJSON); err != nil {
-		return err
-	}
-	if _, err := f.Write(ct); err != nil {
-		return err
+	fileBuf.Write(metaJSON)
+	fileBuf.Write(ct)
+
+	fileBytes := fileBuf.Bytes()
+
+	// Write to local disk
+	if err := os.WriteFile(outPath, fileBytes, 0600); err != nil {
+		return fmt.Errorf("failed to write backup file: %w", err)
 	}
 
 	fmt.Println("Encrypted backup successfully:", filename, "next version:", version)
@@ -138,7 +150,23 @@ func (b *badgerBackupExecutor) Execute() error {
 		fmt.Println("Warning: Failed to save latest.version:", err)
 	}
 
+	// Upload to remote storage if an uploader is configured
+	if b.Uploader != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if uploadErr := b.Uploader.Upload(ctx, filename, fileBytes); uploadErr != nil {
+			// Log but don't fail — local backup already succeeded
+			log.Error().Err(uploadErr).Str("file", filename).Msg("Remote backup upload failed")
+		} else {
+			log.Info().Str("file", filename).Msg("Remote backup uploaded successfully")
+		}
+	}
+
 	return nil
+}
+
+func (b *badgerBackupExecutor) versionFilePath() string {
+	return filepath.Join(b.BackupDir, fmt.Sprintf("latest.version.%s", b.NodeID))
 }
 
 func (b *badgerBackupExecutor) SaveVersionInfo(counter, since uint64) error {
@@ -151,17 +179,14 @@ func (b *badgerBackupExecutor) SaveVersionInfo(counter, since uint64) error {
 	if err != nil {
 		return err
 	}
-	versionFile := filepath.Join(b.BackupDir, "latest.version")
-	return os.WriteFile(versionFile, data, 0600)
+	return os.WriteFile(b.versionFilePath(), data, 0600)
 }
 
 func (b *badgerBackupExecutor) LoadVersionInfo() (BadgerBackupVersionInfo, error) {
 	var info BadgerBackupVersionInfo
-	versionFile := filepath.Join(b.BackupDir, "latest.version")
-	data, err := os.ReadFile(versionFile)
+	data, err := os.ReadFile(b.versionFilePath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// Return default info and no error
 			return BadgerBackupVersionInfo{
 				Version:   0,
 				Since:     0,
