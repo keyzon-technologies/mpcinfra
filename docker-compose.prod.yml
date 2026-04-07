@@ -33,7 +33,6 @@ services:
       - NATS_PASSWORD
     ports:
       - "4222:4222"
-      - "8222:8222"
     volumes:
       - ./deployments/nats/nats-tls.conf:/etc/nats/nats-tls.conf:ro
       - nats_data:/data/jetstream
@@ -61,7 +60,6 @@ services:
       - CONSUL_TLS_CA
     ports:
       - "8501:8501"   # HTTPS
-      - "8500:8500"   # HTTP (kept for health UI only)
     volumes:
       - ./deployments/consul/consul.hcl:/etc/consul/consul.hcl:ro
       - consul_data:/consul/data
