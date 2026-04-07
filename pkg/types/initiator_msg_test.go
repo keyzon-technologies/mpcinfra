@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,14 +15,23 @@ func TestKeyTypeConstants(t *testing.T) {
 }
 
 func TestGenerateKeyMessage_Raw(t *testing.T) {
+	ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	msg := &GenerateKeyMessage{
 		WalletID:  "test-wallet-123",
+		Nonce:     "abc-nonce",
+		Timestamp: ts,
 		Signature: []byte("test-signature"),
 	}
 
 	raw, err := msg.Raw()
 	require.NoError(t, err)
-	assert.Equal(t, []byte("test-wallet-123"), raw)
+
+	// Raw must be valid JSON and include all three fields used for signing.
+	assert.Contains(t, string(raw), "test-wallet-123")
+	assert.Contains(t, string(raw), "abc-nonce")
+	assert.Contains(t, string(raw), "2025-01-01")
+	// Signature must not be present in the signed payload.
+	assert.NotContains(t, string(raw), "test-signature")
 }
 
 func TestGenerateKeyMessage_Sig(t *testing.T) {
@@ -201,11 +211,13 @@ func TestSignTxMessage_EmptyValues(t *testing.T) {
 func TestGenerateKeyMessage_EmptyWallet(t *testing.T) {
 	msg := &GenerateKeyMessage{
 		WalletID:  "",
+		Nonce:     "some-nonce",
+		Timestamp: time.Now().UTC(),
 		Signature: []byte("sig"),
 	}
 
 	raw, err := msg.Raw()
 	require.NoError(t, err)
-	assert.Equal(t, []byte(""), raw)
+	assert.NotEmpty(t, raw) // JSON object even with empty wallet_id
 	assert.Equal(t, "", msg.InitiatorID())
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/keyzon-technologies/mpcinfra/pkg/event"
 	"github.com/keyzon-technologies/mpcinfra/pkg/eventconsumer"
 	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
@@ -110,9 +112,12 @@ func (c *mpcClient) CreateWallet(walletID string) error {
 
 // CreateWalletWithAuthorizers generates a GenerateKeyMessage with authorizer signatures, signs it, and publishes it.
 func (c *mpcClient) CreateWalletWithAuthorizers(walletID string, authorizerSignatures []types.AuthorizerSignature) error {
-	// build the message
+	// build the message — Nonce + Timestamp bind the signature to this specific
+	// invocation, preventing replay of a captured keygen request.
 	msg := &types.GenerateKeyMessage{
 		WalletID:             walletID,
+		Nonce:                uuid.New().String(),
+		Timestamp:            time.Now().UTC(),
 		AuthorizerSignatures: authorizerSignatures,
 	}
 	// compute the canonical raw bytes

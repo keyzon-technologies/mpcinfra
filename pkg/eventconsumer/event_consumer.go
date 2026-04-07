@@ -150,6 +150,12 @@ func (ec *eventConsumer) handleKeyGenEvent(natMsg *nats.Msg) {
 		return
 	}
 
+	if err := ec.identityStore.ConsumeNonce(msg.Nonce, msg.Timestamp); err != nil {
+		logger.Error("Failed to validate keygen nonce", err)
+		ec.handleKeygenSessionError(msg.WalletID, err, "Failed to validate keygen nonce", natMsg)
+		return
+	}
+
 	if err := ec.identityStore.AuthorizeInitiatorMessage(&msg); err != nil {
 		logger.Error("Failed to authorize initiator message", err)
 		ec.handleKeygenSessionError(msg.WalletID, err, "Failed to authorize initiator message", natMsg)

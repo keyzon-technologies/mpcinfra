@@ -1,6 +1,9 @@
 package types
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type KeyType string
 
@@ -36,6 +39,8 @@ type InitiatorMessage interface {
 
 type GenerateKeyMessage struct {
 	WalletID             string                `json:"wallet_id"`
+	Nonce                string                `json:"nonce"`
+	Timestamp            time.Time             `json:"timestamp"`
 	Signature            []byte                `json:"signature"`
 	AuthorizerSignatures []AuthorizerSignature `json:"authorizer_signatures,omitempty"`
 }
@@ -88,7 +93,16 @@ func (m *SignTxMessage) InitiatorID() string {
 }
 
 func (m *GenerateKeyMessage) Raw() ([]byte, error) {
-	return []byte(m.WalletID), nil
+	payload := struct {
+		WalletID  string    `json:"wallet_id"`
+		Nonce     string    `json:"nonce"`
+		Timestamp time.Time `json:"timestamp"`
+	}{
+		WalletID:  m.WalletID,
+		Nonce:     m.Nonce,
+		Timestamp: m.Timestamp,
+	}
+	return json.Marshal(payload)
 }
 
 func (m *GenerateKeyMessage) Sig() []byte {

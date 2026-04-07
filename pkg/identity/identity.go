@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"filippo.io/age"
 	"golang.org/x/term"
@@ -44,6 +45,11 @@ type Store interface {
 
 	SignEcdhMessage(msg *types.ECDHMessage) ([]byte, error)
 	VerifySignature(msg *types.ECDHMessage) error
+
+	// ConsumeNonce validates that issuedAt is within the acceptable time window
+	// and that nonce has not been seen before. On success the nonce is recorded
+	// so any subsequent call with the same nonce returns an error.
+	ConsumeNonce(nonce string, issuedAt time.Time) error
 
 	SetSymmetricKey(peerID string, key []byte)
 	GetSymmetricKey(peerID string) ([]byte, error)
@@ -89,6 +95,12 @@ type AuthorizerConfigEntry struct {
 	Algorithm string `mapstructure:"algorithm"`
 }
 
+const (
+	// nonceWindow is the maximum age (and future skew) accepted for a signed message.
+	// A captured GenerateKeyMessage is only replayable within this window.
+	nonceWindow = 10 * time.Minute
+)
+
 // fileStore implements the Store interface using the filesystem
 type fileStore struct {
 	identityDir     string
@@ -103,6 +115,10 @@ type fileStore struct {
 	symmetricKeys        map[string][]byte
 	authConfig           AuthorizationConfig
 	cachedAuthorizerKeys map[AuthorizerID]any // ed25519.PublicKey or *ecdsa.PublicKey
+
+	// Replay protection: tracks nonces until they expire.
+	nonceMu    sync.Mutex
+	usedNonces map[string]time.Time // nonce → expiry (issuedAt + nonceWindow)
 }
 
 // NewFileStore creates a new identity store
@@ -145,6 +161,7 @@ func NewFileStore(identityDir, nodeName string, decrypt bool, agePasswordFile st
 		initiatorKey:         initiatorKey,
 		symmetricKeys:        make(map[string][]byte),
 		cachedAuthorizerKeys: make(map[AuthorizerID]any),
+		usedNonces:           make(map[string]time.Time),
 	}
 
 	// Check that each node in peers.json has an identity file
@@ -559,6 +576,41 @@ func (s *fileStore) VerifySignature(msg *types.ECDHMessage) error {
 	// Verify the signature
 	if !ed25519.Verify(senderPk, msgBytes, msg.Signature) {
 		return fmt.Errorf("invalid signature from %s with public key %s", msg.From, hex.EncodeToString(senderPk))
+	}
+
+	return nil
+}
+
+// ConsumeNonce validates that issuedAt falls within the acceptable time window
+// and that nonce has not been seen before. Expired nonces are pruned on each call.
+func (s *fileStore) ConsumeNonce(nonce string, issuedAt time.Time) error {
+	if nonce == "" {
+		return fmt.Errorf("nonce is required")
+	}
+
+	now := time.Now().UTC()
+	if issuedAt.After(now.Add(nonceWindow)) {
+		return fmt.Errorf("message timestamp is too far in the future")
+	}
+	if issuedAt.Before(now.Add(-nonceWindow)) {
+		return fmt.Errorf("message timestamp has expired")
+	}
+
+	s.nonceMu.Lock()
+	defer s.nonceMu.Unlock()
+
+	if _, seen := s.usedNonces[nonce]; seen {
+		return fmt.Errorf("nonce has already been used (replay detected)")
+	}
+
+	expiry := issuedAt.Add(nonceWindow)
+	s.usedNonces[nonce] = expiry
+
+	// Prune nonces that are no longer within any valid window.
+	for n, exp := range s.usedNonces {
+		if now.After(exp) {
+			delete(s.usedNonces, n)
+		}
 	}
 
 	return nil
