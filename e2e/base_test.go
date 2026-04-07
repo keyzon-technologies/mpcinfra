@@ -16,13 +16,13 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
 	"github.com/hashicorp/consul/api"
+	"github.com/joho/godotenv"
 	"github.com/keyzon-technologies/mpcinfra/pkg/client"
 	"github.com/keyzon-technologies/mpcinfra/pkg/event"
 	"github.com/keyzon-technologies/mpcinfra/pkg/kvstore"
 	"github.com/keyzon-technologies/mpcinfra/pkg/types"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -32,19 +32,14 @@ const (
 )
 
 type TestConfig struct {
-	Nats struct {
-		URL string `yaml:"url"`
-	} `yaml:"nats"`
-	Consul struct {
-		Address string `yaml:"address"`
-	} `yaml:"consul"`
-	MPCThreshold         int    `yaml:"mpc_threshold"`
-	Environment          string `yaml:"environment"`
-	BadgerPassword       string `yaml:"badger_password"`
-	EventInitiatorPubkey string `yaml:"event_initiator_pubkey"`
-	mpcinfraVersion      string `yaml:"mpcinfra_version"`
-	MaxConcurrentKeygen  int    `yaml:"max_concurrent_keygen"`
-	DbPath               string `yaml:"db_path"`
+	NatsURL              string
+	ConsulAddress        string
+	MPCThreshold         int
+	Environment          string
+	BadgerPassword       string
+	EventInitiatorPubkey string
+	MaxConcurrentKeygen  int
+	DbPath               string
 }
 
 type E2ETestSuite struct {
@@ -62,7 +57,8 @@ type E2ETestSuite struct {
 }
 
 func NewE2ETestSuite(testDir string) *E2ETestSuite {
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = cancel // cancelled via Cleanup
 	return &E2ETestSuite{
 		ctx:              ctx,
 		testDir:          testDir,
@@ -74,13 +70,29 @@ func NewE2ETestSuite(testDir string) *E2ETestSuite {
 }
 
 func (s *E2ETestSuite) LoadConfig() error {
-	configPath := filepath.Join(s.testDir, "config.test.yaml")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return err
+	envPath := filepath.Join(s.testDir, ".env.test")
+	if err := godotenv.Load(envPath); err != nil {
+		return fmt.Errorf("failed to load %s: %w", envPath, err)
 	}
 
-	return yaml.Unmarshal(data, &s.config)
+	s.config.NatsURL = os.Getenv("NATS_URL")
+	s.config.ConsulAddress = os.Getenv("CONSUL_ADDRESS")
+	s.config.Environment = os.Getenv("ENVIRONMENT")
+	s.config.BadgerPassword = os.Getenv("BADGER_PASSWORD")
+	s.config.EventInitiatorPubkey = os.Getenv("EVENT_INITIATOR_PUBKEY")
+	s.config.DbPath = os.Getenv("DB_PATH")
+	if s.config.DbPath == "" {
+		s.config.DbPath = "./test_db"
+	}
+
+	if v := os.Getenv("MPC_THRESHOLD"); v != "" {
+		fmt.Sscanf(v, "%d", &s.config.MPCThreshold)
+	}
+	if v := os.Getenv("MAX_CONCURRENT_KEYGEN"); v != "" {
+		fmt.Sscanf(v, "%d", &s.config.MaxConcurrentKeygen)
+	}
+
+	return nil
 }
 
 func (s *E2ETestSuite) RunMakeClean() error {
@@ -229,7 +241,7 @@ func (s *E2ETestSuite) RegisterPeers(t *testing.T) {
 	nodeDir := filepath.Join(s.testDir, "test_node0")
 	cmd := exec.Command("mpcinfra-cli", "register-peers")
 	cmd.Dir = nodeDir
-	cmd.Env = append(os.Environ(), "mpcinfra_CONFIG=config.yaml")
+	cmd.Env = os.Environ()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -285,7 +297,7 @@ func (s *E2ETestSuite) StartNodes(t *testing.T) {
 		// Start node process
 		cmd := exec.Command("mpcinfra", "start", "-n", nodeName)
 		cmd.Dir = nodeDir
-		cmd.Env = append(os.Environ(), "mpcinfra_CONFIG=config.yaml")
+		cmd.Env = os.Environ()
 
 		// Create log files for stdout and stderr
 		logDir := filepath.Join(s.testDir, "logs")
