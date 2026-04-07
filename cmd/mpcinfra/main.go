@@ -192,7 +192,6 @@ func runNode(ctx context.Context, c *cli.Command) error {
 				consulClient.KV(),
 				encryption.DeriveKey(appConfig.ConsulBackupPassword, "mpcinfra-consul-backup"),
 				viper.GetString("backup_dir"),
-				viper.GetInt("backup_consul_retention_count"),
 				consulBackupArgs...,
 			)
 			stopConsulBackup := infra.StartPeriodicConsulBackup(ctx, consulBackupExec, backupPeriodSeconds)

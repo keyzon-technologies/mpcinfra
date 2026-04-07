@@ -125,7 +125,6 @@ func InitViperConfig() {
 	viper.BindEnv("nats.tls.client_key_b64", "NATS_CLIENT_KEY")
 	viper.BindEnv("nats.tls.ca_b64", "TLS_CA")
 
-	viper.BindEnv("backup_consul_retention_count", "BACKUP_CONSUL_RETENTION_COUNT")
 	viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
 	viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
 	viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
