@@ -23,6 +23,12 @@ import (
 const (
 	ECDHExchangeTopic   = "ecdh:exchange"
 	ECDHExchangeTimeout = 2 * time.Minute
+
+	// ecdhTimestampWindow is the maximum age (and future skew) accepted for an
+	// ECDH broadcast. It must be larger than ECDHExchangeTimeout to accommodate
+	// clock differences between nodes, but small enough to block replays from
+	// previous sessions.
+	ecdhTimestampWindow = 5 * time.Minute
 )
 
 type ECDHSession interface {
@@ -103,10 +109,27 @@ func (e *ecdhSession) ListenKeyExchange() error {
 
 		logger.Debug("Received ECDH message", "from", ecdhMsg.From, "to", e.nodeID)
 
-		//TODO: consider how to avoid replay attack
 		if err := e.identityStore.VerifySignature(&ecdhMsg); err != nil {
 			logger.Error("ECDH signature verification failed", err, "from", ecdhMsg.From)
 			e.errCh <- err
+			return
+		}
+
+		// Reject messages outside the acceptable time window. Because the
+		// timestamp is covered by the Ed25519 signature (MarshalForSigning
+		// includes it), an attacker cannot alter it without invalidating the
+		// signature. This prevents replay of ECDH broadcasts from previous
+		// sessions, which would cause symmetric-key mismatch and break all
+		// subsequent P2P message decryption.
+		now := time.Now().UTC()
+		if ecdhMsg.Timestamp.After(now.Add(ecdhTimestampWindow)) {
+			logger.Error("ECDH message timestamp too far in future", fmt.Errorf("skew too large"), "from", ecdhMsg.From)
+			e.errCh <- fmt.Errorf("ECDH message from %s has timestamp too far in the future", ecdhMsg.From)
+			return
+		}
+		if ecdhMsg.Timestamp.Before(now.Add(-ecdhTimestampWindow)) {
+			logger.Error("ECDH message timestamp expired", fmt.Errorf("message too old"), "from", ecdhMsg.From)
+			e.errCh <- fmt.Errorf("ECDH message from %s has expired timestamp (possible replay)", ecdhMsg.From)
 			return
 		}
 
@@ -180,17 +203,20 @@ func deriveConsistentInfo(a, b string) []byte {
 	return []byte(b + a)
 }
 
+// ecdhHKDFSalt is a fixed, public domain-separation salt for symmetric-key
+// derivation. RFC 5869 recommends a non-nil salt when a random one is not
+// available; using an application-specific constant prevents cross-protocol
+// key-reuse and strengthens derivation against weak shared-secret inputs.
+var ecdhHKDFSalt = []byte("mpcinfra-ecdh-symmetric-key-v1")
+
 // derives a symmetric key from the shared secret and peer ID using HKDF.
 func (e *ecdhSession) deriveSymmetricKey(sharedSecret []byte, peerID string) []byte {
 	hash := sha256.New
 
-	// Info parameter can include context-specific data; here we use a pair of party IDs
+	// Info parameter binds the derived key to the specific node pair.
 	info := deriveConsistentInfo(e.nodeID, peerID)
 
-	// Salt can be nil or a random value; here we use nil
-	var salt []byte
-
-	hkdf := hkdf.New(hash, sharedSecret, salt, info)
+	hkdf := hkdf.New(hash, sharedSecret, ecdhHKDFSalt, info)
 
 	// Derive a 32-byte symmetric key (suitable for AES-256)
 	symmetricKey := make([]byte, 32)

@@ -57,6 +57,12 @@ type ECDSAKeygenData struct {
 	Pairs map[string]*DklsPairData `json:"pairs"`
 }
 
+// maxPendingPairMsgs caps the pre-setup message buffer to prevent a compromised
+// or misbehaving peer from causing unbounded memory growth before pairSetupReady
+// is set. In normal operation only a handful of messages arrive in that window;
+// 500 is well above any legitimate value for deployments up to ~30 nodes.
+const maxPendingPairMsgs = 500
+
 // ─── Session ─────────────────────────────────────────────────────────────────
 
 type ecdsaKeygenSession struct {
@@ -174,8 +180,8 @@ func (s *ecdsaKeygenSession) Init() {
 	var err error
 	s.frostParticipant, err = frostdkg.NewDkgParticipant(
 		selfID,
-		uint32(s.threshold+1), // Feldman threshold = t+1
-		"1",                   // context string (fixed per protocol version)
+		uint32(s.threshold+1),      // Feldman threshold = t+1
+		"mpcinfra-ecdsa-keygen-v1", // context string — domain-separates this DKG from other uses
 		s.curve,
 		others...,
 	)
@@ -520,6 +526,11 @@ func (s *ecdsaKeygenSession) handleDklsPairMsg(msg *types.MpcMsg) {
 	if !s.pairSetupReady.Load() {
 		// Iterators not yet populated — buffer the message and replay after setup.
 		s.pairsMu.Lock()
+		if len(s.pendingPairMsgs) >= maxPendingPairMsgs {
+			s.pairsMu.Unlock()
+			s.sendErr(fmt.Errorf("DKLS pair setup: pending message buffer overflow (possible DoS from peer %s)", msg.FromNodeID))
+			return
+		}
 		s.pendingPairMsgs = append(s.pendingPairMsgs, msg)
 		s.pairsMu.Unlock()
 		return
