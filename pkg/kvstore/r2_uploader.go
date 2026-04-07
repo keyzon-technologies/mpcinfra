@@ -80,6 +80,18 @@ func (u *R2Uploader) ListObjects(ctx context.Context) ([]string, error) {
 	return keys, nil
 }
 
+// DeleteObject removes a single object by its full key.
+func (u *R2Uploader) DeleteObject(ctx context.Context, key string) error {
+	_, err := u.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(u.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("r2 delete %q: %w", key, err)
+	}
+	return nil
+}
+
 // Download retrieves a single object by its full key and returns its contents.
 func (u *R2Uploader) Download(ctx context.Context, key string) ([]byte, error) {
 	resp, err := u.client.GetObject(ctx, &s3.GetObjectInput{

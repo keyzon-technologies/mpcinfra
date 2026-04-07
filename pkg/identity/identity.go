@@ -107,11 +107,9 @@ type fileStore struct {
 
 // NewFileStore creates a new identity store
 func NewFileStore(identityDir, nodeName string, decrypt bool, agePasswordFile string) (*fileStore, error) {
-	if err := os.MkdirAll(identityDir, 0750); err != nil {
-		return nil, fmt.Errorf("failed to create identity directory: %w", err)
+	if _, err := os.Stat(identityDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("identity directory not found: %s (run setup_identities.sh first)", identityDir)
 	}
-
-	identityDir = identityDir + "/" + nodeName
 
 	privateKeyHex, err := loadPrivateKey(identityDir, nodeName, decrypt, agePasswordFile)
 	if err != nil {

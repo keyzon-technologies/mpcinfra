@@ -17,11 +17,11 @@ type AppConfig struct {
 	NATs   *NATsConfig   `mapstructure:"nats"`
 	R2     *R2Config     `mapstructure:"r2"`
 
-	Environment           string `mapstructure:"environment"`
-	BadgerPassword        string `mapstructure:"badger_password"`
-	BadgerBackupPassword  string `mapstructure:"badger_backup_password"`
-	ConsulBackupPassword  string `mapstructure:"consul_backup_password"`
-	ChainCodeHex          string `mapstructure:"chain_code"`
+	Environment          string `mapstructure:"environment"`
+	BadgerPassword       string `mapstructure:"badger_password"`
+	BadgerBackupPassword string `mapstructure:"badger_backup_password"`
+	ConsulBackupPassword string `mapstructure:"consul_backup_password"`
+	ChainCodeHex         string `mapstructure:"chain_code"`
 }
 
 // R2Config holds Cloudflare R2 credentials for off-site backup uploads.
@@ -45,9 +45,7 @@ func (r *R2Config) IsEnabled() bool {
 // Implement masking serializer AppConfig
 func (c AppConfig) MarshalJSONMask() string {
 	// clone app config
-	c.BadgerPassword = strings.Repeat("*", len(c.BadgerPassword))
 	c.BadgerBackupPassword = strings.Repeat("*", len(c.BadgerBackupPassword))
-	c.Consul.Password = strings.Repeat("*", len(c.Consul.Password))
 	c.Consul.Token = strings.Repeat("*", len(c.Consul.Token))
 	if c.Consul.TLS != nil {
 		consulTLSCopy := *c.Consul.TLS
@@ -77,9 +75,10 @@ type ConsulConfig struct {
 }
 
 type ConsulTLSConfig struct {
-	ClientCert string `mapstructure:"client_cert"`
-	ClientKey  string `mapstructure:"client_key"`
-	CACert     string `mapstructure:"ca_cert"`
+	// Base64-encoded content (cloud/production via env vars)
+	ClientCertB64 string `mapstructure:"client_cert_b64"`
+	ClientKeyB64  string `mapstructure:"client_key_b64"`
+	CAB64         string `mapstructure:"ca_b64"`
 }
 
 type NATsConfig struct {
@@ -90,9 +89,10 @@ type NATsConfig struct {
 }
 
 type TLSConfig struct {
-	ClientCert string `mapstructure:"client_cert"`
-	ClientKey  string `mapstructure:"client_key"`
-	CACert     string `mapstructure:"ca_cert"`
+	// Base64-encoded content (cloud/production via env vars)
+	ClientCertB64 string `mapstructure:"client_cert_b64"`
+	ClientKeyB64  string `mapstructure:"client_key_b64"`
+	CAB64         string `mapstructure:"ca_b64"`
 }
 
 func InitViperConfig() {
@@ -105,23 +105,27 @@ func InitViperConfig() {
 	viper.AutomaticEnv()
 
 	viper.BindEnv("environment", "ENVIRONMENT")
+
 	viper.BindEnv("badger_password", "BADGER_PASSWORD")
 	viper.BindEnv("badger_backup_password", "BADGER_BACKUP_PASSWORD")
-	viper.BindEnv("consul_backup_password", "CONSUL_BACKUP_PASSWORD")
+
 	viper.BindEnv("chain_code", "CHAIN_CODE")
+
+	viper.BindEnv("consul_backup_password", "CONSUL_BACKUP_PASSWORD")
 	viper.BindEnv("consul.address", "CONSUL_ADDRESS")
-	viper.BindEnv("consul.username", "CONSUL_USERNAME")
-	viper.BindEnv("consul.password", "CONSUL_PASSWORD")
 	viper.BindEnv("consul.token", "CONSUL_TOKEN")
-	viper.BindEnv("consul.tls.client_cert", "CONSUL_TLS_CLIENT_CERT")
-	viper.BindEnv("consul.tls.client_key", "CONSUL_TLS_CLIENT_KEY")
-	viper.BindEnv("consul.tls.ca_cert", "CONSUL_TLS_CA_CERT")
+	viper.BindEnv("consul.tls.client_cert_b64", "CONSUL_CLIENT_CERT")
+	viper.BindEnv("consul.tls.client_key_b64", "CONSUL_CLIENT_KEY")
+	viper.BindEnv("consul.tls.ca_b64", "TLS_CA")
+
 	viper.BindEnv("nats.url", "NATS_URL")
 	viper.BindEnv("nats.username", "NATS_USERNAME")
 	viper.BindEnv("nats.password", "NATS_PASSWORD")
-	viper.BindEnv("nats.tls.client_cert", "NATS_TLS_CLIENT_CERT")
-	viper.BindEnv("nats.tls.client_key", "NATS_TLS_CLIENT_KEY")
-	viper.BindEnv("nats.tls.ca_cert", "NATS_TLS_CA_CERT")
+	viper.BindEnv("nats.tls.client_cert_b64", "NATS_CLIENT_CERT")
+	viper.BindEnv("nats.tls.client_key_b64", "NATS_CLIENT_KEY")
+	viper.BindEnv("nats.tls.ca_b64", "TLS_CA")
+
+	viper.BindEnv("backup_consul_retention_count", "BACKUP_CONSUL_RETENTION_COUNT")
 	viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
 	viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
 	viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")

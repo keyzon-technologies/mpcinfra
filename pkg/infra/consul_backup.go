@@ -26,6 +26,8 @@ const (
 // ConsulBackupUploader is the same interface as kvstore.BackupUploader — allows reuse of R2Uploader.
 type ConsulBackupUploader interface {
 	Upload(ctx context.Context, filename string, data []byte) error
+	ListObjects(ctx context.Context) ([]string, error)
+	DeleteObject(ctx context.Context, key string) error
 }
 
 type ConsulBackupMeta struct {
@@ -36,21 +38,27 @@ type ConsulBackupMeta struct {
 }
 
 type consulBackupExecutor struct {
-	nodeID    string
-	kv        ConsulKV
-	encKey    []byte
-	backupDir string
-	uploader  ConsulBackupUploader
+	nodeID         string
+	kv             ConsulKV
+	encKey         []byte
+	backupDir      string
+	uploader       ConsulBackupUploader
+	retentionCount int
+	lastHash       [32]byte // SHA-256 of last serialized KV payload
 }
+
+const defaultRetentionCount = 3
 
 // NewConsulBackupExecutor creates a backup executor for the Consul KV store.
 // It exports all keys under every managed prefix, encrypts with AES-256-GCM,
 // writes locally, and optionally uploads to remote storage (e.g. R2).
+// retentionCount controls how many remote backups to keep (0 = keep all).
 func NewConsulBackupExecutor(
 	nodeID string,
 	kv ConsulKV,
 	encryptionKey []byte,
 	backupDir string,
+	retentionCount int,
 	uploader ...ConsulBackupUploader,
 ) *consulBackupExecutor {
 	if backupDir == "" {
@@ -59,11 +67,15 @@ func NewConsulBackupExecutor(
 	if err := os.MkdirAll(backupDir, 0700); err != nil {
 		panic(fmt.Errorf("consul backup: failed to create backup directory: %w", err))
 	}
+	if retentionCount <= 0 {
+		retentionCount = defaultRetentionCount
+	}
 	exe := &consulBackupExecutor{
-		nodeID:    nodeID,
-		kv:        kv,
-		encKey:    encryptionKey,
-		backupDir: backupDir,
+		nodeID:         nodeID,
+		kv:             kv,
+		encKey:         encryptionKey,
+		backupDir:      backupDir,
+		retentionCount: retentionCount,
 	}
 	if len(uploader) > 0 {
 		exe.uploader = uploader[0]
@@ -87,6 +99,13 @@ func (c *consulBackupExecutor) Execute() error {
 	plain, err := json.Marshal(pairs)
 	if err != nil {
 		return fmt.Errorf("consul backup: failed to marshal KV pairs: %w", err)
+	}
+
+	// Skip backup if data hasn't changed since last run
+	currentHash := sha256.Sum256(plain)
+	if currentHash == c.lastHash {
+		logger.Info("Consul backup: no changes detected, skipping")
+		return nil
 	}
 
 	// Encrypt
@@ -125,19 +144,58 @@ func (c *consulBackupExecutor) Execute() error {
 	if err := os.WriteFile(outPath, fileBytes, 0600); err != nil {
 		return fmt.Errorf("consul backup: failed to write file: %w", err)
 	}
+	c.lastHash = currentHash
 	logger.Info("Consul backup written", "file", filename, "keys", len(pairs))
 
 	if c.uploader != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+
 		if uploadErr := c.uploader.Upload(ctx, filename, fileBytes); uploadErr != nil {
 			logger.Error("Consul backup: remote upload failed", uploadErr, "file", filename)
 		} else {
 			logger.Info("Consul backup: remote upload successful", "file", filename)
+			c.pruneRemoteBackups(ctx)
 		}
 	}
 
 	return nil
+}
+
+// pruneRemoteBackups deletes old remote backups, keeping only the most recent retentionCount files.
+func (c *consulBackupExecutor) pruneRemoteBackups(ctx context.Context) {
+	keys, err := c.uploader.ListObjects(ctx)
+	if err != nil {
+		logger.Error("Consul backup: failed to list remote backups for pruning", err)
+		return
+	}
+
+	// Filter only this node's backup files
+	prefix := fmt.Sprintf("consul-backup-%s-", c.nodeID)
+	var nodeKeys []string
+	for _, k := range keys {
+		if len(k) > len(prefix) {
+			// match by suffix of the key (strip any path prefix)
+			base := filepath.Base(k)
+			if len(base) > len(prefix) && base[:len(prefix)] == prefix {
+				nodeKeys = append(nodeKeys, k)
+			}
+		}
+	}
+
+	// Keys are sorted ascending by ListObjects — oldest first
+	if len(nodeKeys) <= c.retentionCount {
+		return
+	}
+
+	toDelete := nodeKeys[:len(nodeKeys)-c.retentionCount]
+	for _, key := range toDelete {
+		if err := c.uploader.DeleteObject(ctx, key); err != nil {
+			logger.Error("Consul backup: failed to delete old backup", err, "key", key)
+		} else {
+			logger.Info("Consul backup: deleted old backup", "key", key)
+		}
+	}
 }
 
 // StartPeriodicConsulBackup runs Execute on a ticker and returns a stop function.

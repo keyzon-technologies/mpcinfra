@@ -1,11 +1,13 @@
 package infra
 
 import (
-	"path/filepath"
+	"crypto/tls"
+	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/hashicorp/consul/api"
-	"github.com/keyzon-technologies/mpcinfra/pkg/config"
+	"github.com/keyzon-technologies/mpcinfra/pkg/constant"
 	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
 	"github.com/spf13/viper"
 )
@@ -35,6 +37,16 @@ func GetConsulClient(environment string) *api.Client {
 		"token_length", tokenLength,
 	)
 
+	if environment == constant.EnvProduction {
+		tlsCfg := buildConsulTLSConfig()
+		cfg.Scheme = "https"
+		cfg.HttpClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsCfg,
+			},
+		}
+	}
+
 	client, err := api.NewClient(cfg)
 	if err != nil {
 		logger.Fatal("Failed to create consul client", err)
@@ -48,33 +60,32 @@ func GetConsulClient(environment string) *api.Client {
 	return client
 }
 
-// loadConsulTLSConfig reads TLS paths from config/env, falling back to default cert paths.
-func loadConsulTLSConfig() *api.TLSConfig {
-	var tlsCfg config.ConsulTLSConfig
-	if v := viper.GetString("consul.tls.client_cert"); v != "" {
-		tlsCfg.ClientCert = v
-	}
-	if v := viper.GetString("consul.tls.client_key"); v != "" {
-		tlsCfg.ClientKey = v
-	}
-	if v := viper.GetString("consul.tls.ca_cert"); v != "" {
-		tlsCfg.CACert = v
+// buildConsulTLSConfig builds a *tls.Config from base64 env vars.
+// Bypasses api.TLSConfig to avoid version-specific PEM field issues.
+func buildConsulTLSConfig() *tls.Config {
+	certB64 := viper.GetString("consul.tls.client_cert_b64")
+	keyB64 := viper.GetString("consul.tls.client_key_b64")
+	caB64 := viper.GetString("consul.tls.ca_b64")
+
+	if certB64 == "" || keyB64 == "" || caB64 == "" {
+		logger.Fatal(
+			"Missing required Consul TLS base64 env vars: "+
+				"CONSUL_CLIENT_CERT="+strconv.FormatBool(certB64 != "")+
+				", CONSUL_CLIENT_KEY="+strconv.FormatBool(keyB64 != "")+
+				", TLS_CA="+strconv.FormatBool(caB64 != ""),
+			nil,
+		)
 	}
 
-	// Fall back to default paths if any field is missing
-	if tlsCfg.ClientCert == "" {
-		tlsCfg.ClientCert = filepath.Join(".", "certs", "consul-client-cert.pem")
-	}
-	if tlsCfg.ClientKey == "" {
-		tlsCfg.ClientKey = filepath.Join(".", "certs", "consul-client-key.pem")
-	}
-	if tlsCfg.CACert == "" {
-		tlsCfg.CACert = filepath.Join(".", "certs", "consul-rootCA.pem")
+	pems, err := LoadTLSPEMs(certB64, keyB64, caB64)
+	if err != nil {
+		logger.Fatal("Failed to decode Consul TLS base64 certs", err)
 	}
 
-	return &api.TLSConfig{
-		CertFile: tlsCfg.ClientCert,
-		KeyFile:  tlsCfg.ClientKey,
-		CAFile:   tlsCfg.CACert,
+	tlsCfg, err := pems.TLSConfig()
+	if err != nil {
+		logger.Fatal("Failed to build Consul TLS config", err)
 	}
+
+	return tlsCfg
 }

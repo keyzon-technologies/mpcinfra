@@ -17,6 +17,7 @@ import (
 	"github.com/keyzon-technologies/mpcinfra/pkg/config"
 	"github.com/keyzon-technologies/mpcinfra/pkg/constant"
 	"github.com/keyzon-technologies/mpcinfra/pkg/event"
+	"github.com/keyzon-technologies/mpcinfra/pkg/infra"
 	"github.com/keyzon-technologies/mpcinfra/pkg/logger"
 	"github.com/keyzon-technologies/mpcinfra/pkg/types"
 	"github.com/nats-io/nats.go"
@@ -297,28 +298,26 @@ func getNATSConnection(environment string, appConfig *config.AppConfig) (*nats.C
 	}
 
 	if environment == constant.EnvProduction {
-		// Load TLS config from configuration
-		var clientCert, clientKey, caCert string
-		if appConfig.NATs.TLS != nil {
-			clientCert = appConfig.NATs.TLS.ClientCert
-			clientKey = appConfig.NATs.TLS.ClientKey
-			caCert = appConfig.NATs.TLS.CACert
+		if appConfig.NATs.TLS == nil {
+			return nil, fmt.Errorf("NATS TLS config required in production (set NATS_CLIENT_CERT, NATS_CLIENT_KEY, TLS_CA)")
 		}
 
-		// Fallback to default paths if not configured
-		if clientCert == "" {
-			clientCert = filepath.Join(".", "certs", "client-cert.pem")
+		pems, err := infra.LoadTLSPEMs(
+			appConfig.NATs.TLS.ClientCertB64,
+			appConfig.NATs.TLS.ClientKeyB64,
+			appConfig.NATs.TLS.CAB64,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load NATS TLS: %w", err)
 		}
-		if clientKey == "" {
-			clientKey = filepath.Join(".", "certs", "client-key.pem")
-		}
-		if caCert == "" {
-			caCert = filepath.Join(".", "certs", "rootCA.pem")
+
+		tlsCfg, err := pems.TLSConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build NATS TLS config: %w", err)
 		}
 
 		opts = append(opts,
-			nats.ClientCert(clientCert, clientKey),
-			nats.RootCAs(caCert),
+			nats.Secure(tlsCfg),
 			nats.UserInfo(appConfig.NATs.Username, appConfig.NATs.Password),
 		)
 	}

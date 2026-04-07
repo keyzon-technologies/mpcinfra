@@ -172,36 +172,35 @@ func runNode(ctx context.Context, c *cli.Command) error {
 		stopBackup := StartPeriodicBackup(ctx, badgerKV, backupPeriodSeconds)
 		defer stopBackup()
 
-		consulBackupArgs := []infra.ConsulBackupUploader{}
-		if appConfig.R2.IsEnabled() {
-			r2Prefix := appConfig.R2.Prefix
-			if r2Prefix == "" {
-				r2Prefix = nodeName + "/"
+		if nodeName == "node0" {
+			consulBackupArgs := []infra.ConsulBackupUploader{}
+			if appConfig.R2.IsEnabled() {
+				r2Uploader, err := kvstore.NewR2Uploader(
+					appConfig.R2.AccountID,
+					appConfig.R2.AccessKeyID,
+					appConfig.R2.SecretAccessKey,
+					appConfig.R2.Bucket,
+					"consul/",
+				)
+				if err != nil {
+					logger.Fatal("Failed to initialize R2 uploader for Consul backup", err)
+				}
+				consulBackupArgs = append(consulBackupArgs, r2Uploader)
 			}
-			r2Uploader, err := kvstore.NewR2Uploader(
-				appConfig.R2.AccountID,
-				appConfig.R2.AccessKeyID,
-				appConfig.R2.SecretAccessKey,
-				appConfig.R2.Bucket,
-				r2Prefix+"consul/",
+			consulBackupExec := infra.NewConsulBackupExecutor(
+				nodeName,
+				consulClient.KV(),
+				encryption.DeriveKey(appConfig.ConsulBackupPassword, "mpcinfra-consul-backup"),
+				viper.GetString("backup_dir"),
+				viper.GetInt("backup_consul_retention_count"),
+				consulBackupArgs...,
 			)
-			if err != nil {
-				logger.Fatal("Failed to initialize R2 uploader for Consul backup", err)
-			}
-			consulBackupArgs = append(consulBackupArgs, r2Uploader)
+			stopConsulBackup := infra.StartPeriodicConsulBackup(ctx, consulBackupExec, backupPeriodSeconds)
+			defer stopConsulBackup()
 		}
-		consulBackupExec := infra.NewConsulBackupExecutor(
-			nodeName,
-			consulClient.KV(),
-			encryption.DeriveKey(appConfig.ConsulBackupPassword, "mpcinfra-consul-backup"),
-			viper.GetString("backup_dir"),
-			consulBackupArgs...,
-		)
-		stopConsulBackup := infra.StartPeriodicConsulBackup(ctx, consulBackupExec, backupPeriodSeconds)
-		defer stopConsulBackup()
 	}
 
-	identityStore, err := identity.NewFileStore("identity", nodeName, decryptPrivateKey, agePasswordFile)
+	identityStore, err := identity.NewFileStore(nodeName+"/identity", nodeName, decryptPrivateKey, agePasswordFile)
 	if err != nil {
 		logger.Fatal("Failed to create identity store", err)
 	}
@@ -520,18 +519,6 @@ func checkRequiredConfigValues(appConfig *config.AppConfig) {
 	}
 }
 
-func NewConsulClient(addr string) *api.Client {
-	// Create a new Consul client
-	consulConfig := api.DefaultConfig()
-	consulConfig.Address = addr
-	consulClient, err := api.NewClient(consulConfig)
-	if err != nil {
-		logger.Fatal("Failed to create consul client", err)
-	}
-	logger.Info("Connected to consul!")
-	return consulClient
-}
-
 func LoadPeersFromConsul(consulClient *api.Client) []config.Peer { // Create a Consul Key-Value store client
 	kv := consulClient.KV()
 	peers, err := config.LoadPeersFromConsul(kv, config.PeersPrefix)
@@ -675,28 +662,27 @@ func GetNATSConnection(environment string, appConfig *config.AppConfig) (*nats.C
 	}
 
 	if environment == constant.EnvProduction {
-		// Load TLS config from configuration
-		var clientCert, clientKey, caCert string
+		var (
+			certB64, keyB64, caB64 string
+		)
+
 		if appConfig.NATs.TLS != nil {
-			clientCert = appConfig.NATs.TLS.ClientCert
-			clientKey = appConfig.NATs.TLS.ClientKey
-			caCert = appConfig.NATs.TLS.CACert
+			certB64 = appConfig.NATs.TLS.ClientCertB64
+			keyB64 = appConfig.NATs.TLS.ClientKeyB64
+			caB64 = appConfig.NATs.TLS.CAB64
 		}
 
-		// Fallback to default paths if not configured
-		if clientCert == "" {
-			clientCert = filepath.Join(".", "certs", "client-cert.pem")
+		natsPEMs, err := infra.LoadTLSPEMs(certB64, keyB64, caB64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load NATS TLS: %w", err)
 		}
-		if clientKey == "" {
-			clientKey = filepath.Join(".", "certs", "client-key.pem")
-		}
-		if caCert == "" {
-			caCert = filepath.Join(".", "certs", "rootCA.pem")
+		tlsCfg, err := natsPEMs.TLSConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build NATS TLS config: %w", err)
 		}
 
 		opts = append(opts,
-			nats.ClientCert(clientCert, clientKey),
-			nats.RootCAs(caCert),
+			nats.Secure(tlsCfg),
 			nats.UserInfo(appConfig.NATs.Username, appConfig.NATs.Password),
 		)
 	}

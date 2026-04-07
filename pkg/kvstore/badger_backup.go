@@ -42,6 +42,7 @@ type badgerBackupExecutor struct {
 	BackupEncryptionKey []byte
 	BackupDir           string
 	Uploader            BackupUploader
+	lastHash            [32]byte // SHA-256 of last backup payload
 }
 
 // NewBadgerBackupExecutor creates a new backup executor.
@@ -87,6 +88,13 @@ func (b *badgerBackupExecutor) Execute() error {
 		return nil
 	}
 
+	// Skip if data hasn't changed since last backup
+	currentHash := sha256.Sum256(plain.Bytes())
+	if currentHash == b.lastHash {
+		log.Info().Msg("[SKIP] No changes detected, skipping backup.")
+		return nil
+	}
+
 	ct, nonce, err := encryption.EncryptAESGCM(plain.Bytes(), b.BackupEncryptionKey)
 	if err != nil {
 		return err
@@ -121,6 +129,7 @@ func (b *badgerBackupExecutor) Execute() error {
 	if err := os.WriteFile(outPath, fileBytes, 0600); err != nil {
 		return fmt.Errorf("failed to write backup file: %w", err)
 	}
+	b.lastHash = currentHash
 	log.Info().Str("file", filename).Int("bytes", len(fileBytes)).Msg("Backup written successfully")
 
 	if b.Uploader != nil {
