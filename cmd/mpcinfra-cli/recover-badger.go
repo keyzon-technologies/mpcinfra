@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -55,7 +53,7 @@ func recoverBadgerFromR2(ctx context.Context, c *cli.Command) error {
 	backupKey := encryption.DeriveKey(string(backupPassBytes), "mpcinfra-badger-backup")
 	dbKey := encryption.DeriveKey(string(dbPassBytes), "mpcinfra-badger-db")
 
-	// ── List backups from R2 ─────────────────────────────────────────────────
+	// ── Locate backup in R2 ──────────────────────────────────────────────────
 	r2Prefix := appConfig.R2.Prefix
 	if r2Prefix == "" {
 		r2Prefix = nodeName + "/"
@@ -72,37 +70,12 @@ func recoverBadgerFromR2(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to initialize R2 client: %w", err)
 	}
 
-	listCtx, listCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer listCancel()
-
-	keys, err := r2.ListObjects(listCtx)
-	if err != nil {
-		return fmt.Errorf("failed to list R2 objects: %w", err)
-	}
-
-	// Filter only Badger backup files for this node (exclude consul/ subfolder)
-	var backupKeys []string
-	for _, k := range keys {
-		if strings.Contains(k, fmt.Sprintf("backup-%s-", nodeName)) &&
-			strings.HasSuffix(k, ".enc") &&
-			!strings.Contains(k, "consul/") {
-			backupKeys = append(backupKeys, k)
-		}
-	}
-
-	if len(backupKeys) == 0 {
-		return fmt.Errorf("no Badger backup files found in R2 for node %q (prefix: %s)", nodeName, r2Prefix)
-	}
-
-	sort.Strings(backupKeys)
-	fmt.Printf("Found %d backup(s). Will download all for incremental restore.\n", len(backupKeys))
-	for _, k := range backupKeys {
-		fmt.Printf("  %s\n", k)
-	}
+	latestKey := r2Prefix + fmt.Sprintf("backup-%s-latest.enc", nodeName)
+	fmt.Printf("Downloading %s...\n", latestKey)
 
 	// ── Confirm ──────────────────────────────────────────────────────────────
 	if !force {
-		fmt.Printf("Restore %d backup(s) to %s? [y/N]: ", len(backupKeys), recoveryPath)
+		fmt.Printf("Restore to %s? [y/N]: ", recoveryPath)
 		var answer string
 		fmt.Scanln(&answer)
 		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
@@ -111,41 +84,25 @@ func recoverBadgerFromR2(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// ── Download all backups into a temp dir ─────────────────────────────────
-	tmpDir, err := os.MkdirTemp("", "mpcinfra-badger-restore-*")
+	// ── Download ─────────────────────────────────────────────────────────────
+	dlCtx, dlCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer dlCancel()
+
+	fileBytes, err := r2.Download(dlCtx, latestKey)
 	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+		return fmt.Errorf("failed to download backup: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	fmt.Printf("Downloaded %d bytes\n", len(fileBytes))
 
-	for _, key := range backupKeys {
-		filename := filepath.Base(key)
-		fmt.Printf("Downloading %s...\n", filename)
-
-		dlCtx, dlCancel := context.WithTimeout(ctx, 2*time.Minute)
-		data, err := r2.Download(dlCtx, key)
-		dlCancel()
-		if err != nil {
-			return fmt.Errorf("failed to download %s: %w", filename, err)
-		}
-
-		localPath := filepath.Join(tmpDir, filename)
-		if err := os.WriteFile(localPath, data, 0600); err != nil {
-			return fmt.Errorf("failed to write %s: %w", localPath, err)
-		}
-		fmt.Printf("  Downloaded %d bytes → %s\n", len(data), filename)
-	}
-
-	// ── Restore using existing executor ─────────────────────────────────────
+	// ── Restore ──────────────────────────────────────────────────────────────
 	if force {
 		if err := os.RemoveAll(recoveryPath); err != nil {
 			return fmt.Errorf("failed to remove existing recovery path: %w", err)
 		}
 	}
 
-	fmt.Printf("Restoring database to %s...\n", recoveryPath)
-	executor := kvstore.NewBadgerBackupExecutor("temp", nil, backupKey, tmpDir)
-	if err := executor.RestoreAllBackupsEncrypted(recoveryPath, dbKey); err != nil {
+	executor := kvstore.NewBadgerBackupExecutor(nodeName, nil, backupKey, ".")
+	if err := executor.RestoreBackupFromBytes(recoveryPath, fileBytes, dbKey); err != nil {
 		return fmt.Errorf("recovery failed: %w", err)
 	}
 

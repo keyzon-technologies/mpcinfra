@@ -63,10 +63,10 @@ func recoverDatabase(ctx context.Context, c *cli.Command) error {
 	fmt.Printf("Backup directory: %s\n", backupDir)
 	fmt.Printf("Recovery path: %s\n", recoveryPath)
 
-	// backupKey decrypts the AES-GCM backup files; dbKey encrypts the restored BadgerDB.
+	// backupKey decrypts the AES-GCM backup file; dbKey encrypts the restored BadgerDB.
 	tempExecutor := kvstore.NewBadgerBackupExecutor("temp", nil, backupKey, backupDir)
 
-	if err := tempExecutor.RestoreAllBackupsEncrypted(recoveryPath, dbKey); err != nil {
+	if err := tempExecutor.RestoreBackup(recoveryPath, dbKey); err != nil {
 		return fmt.Errorf("recovery failed: %w", err)
 	}
 
