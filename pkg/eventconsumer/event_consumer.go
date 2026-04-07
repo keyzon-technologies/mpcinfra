@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"regexp"
 	"sync"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 	DefaultConcurrentSigning = 20
 	KeyGenTimeOut            = 30 * time.Second
 )
+
+// walletIDRegex allows only alphanumerics, hyphens and underscores (max 64
+// chars). This prevents NATS topic injection and storage-key collisions that
+// could arise from characters like ':', '.', '*', or '>'.
+var walletIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 type EventConsumer interface {
 	Run()
@@ -141,6 +147,13 @@ func (ec *eventConsumer) handleKeyGenEvent(natMsg *nats.Msg) {
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		logger.Error("Failed to unmarshal keygen message", err)
 		ec.handleKeygenSessionError(msg.WalletID, err, "Failed to unmarshal keygen message", natMsg)
+		return
+	}
+
+	if !walletIDRegex.MatchString(msg.WalletID) {
+		err := fmt.Errorf("invalid wallet_id format: %q", msg.WalletID)
+		logger.Error("Rejected keygen message", err)
+		ec.handleKeygenSessionError(msg.WalletID, err, "Invalid wallet_id", natMsg)
 		return
 	}
 

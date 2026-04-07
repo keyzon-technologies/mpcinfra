@@ -133,6 +133,7 @@ func NewFileStore(identityDir, nodeName string, decrypt bool, agePasswordFile st
 	}
 
 	privateKey, err := hex.DecodeString(privateKeyHex)
+	security.ZeroString(&privateKeyHex) // hex string is no longer needed after decoding
 	if err != nil {
 		return nil, fmt.Errorf("invalid private key format: %w", err)
 	}
@@ -349,9 +350,6 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		return "", fmt.Errorf("invalid encrypted key path for node %s: %w", nodeName, err)
 	}
 
-	println("identityDir: ", identityDir)
-	println("unencryptedKeyFileName: ", unencryptedKeyFileName)
-
 	unencryptedKeyPath, err := pathutil.SafePath(identityDir, unencryptedKeyFileName)
 	if err != nil {
 		return "", fmt.Errorf("invalid unencrypted key path for node %s: %w", nodeName, err)
@@ -413,10 +411,12 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 			return "", fmt.Errorf("failed to read decrypted key: %w", err)
 		}
 
+		// Copy to string before zeroing the backing slice.
+		keyHex := string(decryptedData)
+		security.ZeroBytes(decryptedData)
 		security.ZeroString(&passphrase)
-		return string(decryptedData), nil
+		return keyHex, nil
 	} else {
-		println(unencryptedKeyPath)
 		// Use the unencrypted private key file
 		if _, err := os.Stat(unencryptedKeyPath); err != nil {
 			return "", fmt.Errorf("no unencrypted private key found for node %s", nodeName)
@@ -427,7 +427,9 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		if err != nil {
 			return "", fmt.Errorf("failed to read private key file: %w", err)
 		}
-		return string(privateKeyData), nil
+		keyHex := string(privateKeyData)
+		security.ZeroBytes(privateKeyData)
+		return keyHex, nil
 	}
 }
 
