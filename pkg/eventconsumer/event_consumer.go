@@ -2,6 +2,8 @@ package eventconsumer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -326,9 +328,10 @@ func (ec *eventConsumer) handleKeygenSessionError(walletID string, err error, co
 		IdempotententKey: composeKeygenIdempotentKey(walletID, natMsg),
 	})
 	if err != nil {
+		h := sha256.Sum256(keygenResultBytes)
 		logger.Error("Failed to enqueue keygen result event", err,
 			"walletID", walletID,
-			"payload", string(keygenResultBytes),
+			"payload_sha256", hex.EncodeToString(h[:]),
 		)
 	}
 	ec.sendReplyToRemoveMsg(natMsg)
