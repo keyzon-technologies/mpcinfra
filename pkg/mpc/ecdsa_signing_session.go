@@ -153,9 +153,9 @@ func (s *ecdsaSigningSession) Init(tx *big.Int) error {
 			return fmt.Errorf("ECDSA sign: unmarshal Alice DKG result: %w", err)
 		}
 		if tweak != nil {
-			s.aliceIter, err = dklsv2.NewAliceSignWithTweak(s.curve, hash, s.msgBytes, &dkgResult, tweak, childPub, 1)
+			s.aliceIter, err = dklsv2.NewAliceSignWithTweak(s.curve, hash, s.msgBytes, &dkgResult, tweak, childPub, dklsv2.Version2)
 		} else {
-			s.aliceIter, err = dklsv2.NewAliceSign(s.curve, hash, s.msgBytes, &dkgResult, 1)
+			s.aliceIter, err = dklsv2.NewAliceSign(s.curve, hash, s.msgBytes, &dkgResult, dklsv2.Version2)
 		}
 		if err != nil {
 			return fmt.Errorf("ECDSA sign: Alice init: %w", err)
@@ -169,9 +169,9 @@ func (s *ecdsaSigningSession) Init(tx *big.Int) error {
 			return fmt.Errorf("ECDSA sign: unmarshal Bob DKG result: %w", err)
 		}
 		if tweak != nil {
-			s.bobIter, err = dklsv2.NewBobSignWithTweak(s.curve, hash, s.msgBytes, &dkgResult, tweak, childPub, 1)
+			s.bobIter, err = dklsv2.NewBobSignWithTweak(s.curve, hash, s.msgBytes, &dkgResult, tweak, childPub, dklsv2.Version2)
 		} else {
-			s.bobIter, err = dklsv2.NewBobSign(s.curve, hash, s.msgBytes, &dkgResult, 1)
+			s.bobIter, err = dklsv2.NewBobSign(s.curve, hash, s.msgBytes, &dkgResult, dklsv2.Version2)
 		}
 		if err != nil {
 			return fmt.Errorf("ECDSA sign: Bob init: %w", err)
