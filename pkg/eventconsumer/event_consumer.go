@@ -31,11 +31,6 @@ const (
 	KeyGenTimeOut            = 30 * time.Second
 )
 
-// walletIDRegex allows only alphanumerics, hyphens and underscores (max 64
-// chars). This prevents NATS topic injection and storage-key collisions that
-// could arise from characters like ':', '.', '*', or '>'.
-var walletIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
-
 type EventConsumer interface {
 	Run()
 	Close() error
@@ -137,6 +132,8 @@ func (ec *eventConsumer) Run() {
 
 	logger.Info("MPC Event consumer started...!")
 }
+
+var walletIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 func (ec *eventConsumer) handleKeyGenEvent(natMsg *nats.Msg) {
 	baseCtx, baseCancel := context.WithTimeout(context.Background(), KeyGenTimeOut)
