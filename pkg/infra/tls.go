@@ -44,6 +44,8 @@ func (p *TLSPEMs) TLSConfig() (*tls.Config, error) {
 
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		RootCAs:      caPool,
+		RootCAs:      caPool, // used by the client side to verify the server's certificate
+		ClientCAs:    caPool, // used by the server side to verify client certificates
+		ClientAuth:   tls.RequireAndVerifyClientCert,
 	}, nil
 }
