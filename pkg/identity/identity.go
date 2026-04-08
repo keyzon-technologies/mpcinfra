@@ -98,7 +98,7 @@ type AuthorizerConfigEntry struct {
 const (
 	// nonceWindow is the maximum age (and future skew) accepted for a signed message.
 	// A captured GenerateKeyMessage is only replayable within this window.
-	nonceWindow = 10 * time.Minute
+	nonceWindow = 45 * time.Second
 )
 
 // fileStore implements the Store interface using the filesystem
