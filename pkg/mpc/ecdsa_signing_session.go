@@ -265,7 +265,7 @@ func (s *ecdsaSigningSession) sendSignMsg(msg *protocol.Message) {
 
 // finishSign is called by Bob when the protocol completes.
 func (s *ecdsaSigningSession) finishSign() {
-	resultMsg, err := s.bobIter.Result(1)
+	resultMsg, err := s.bobIter.Result(dklsv2.Version2)
 	if err != nil {
 		s.sendErr(fmt.Errorf("ECDSA sign: Bob.Result: %w", err))
 		return
