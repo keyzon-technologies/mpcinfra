@@ -153,18 +153,12 @@ func (s *eddsaSigningSession) Init(tx *big.Int) error {
 		if err != nil {
 			return fmt.Errorf("EDDSA sign: BIP32 derive: %w", err)
 		}
-		// Only the signer with the smallest participant ID (ID=1) adds the tweak to their
-		// share. Since skShare is the raw Shamir share and Lagrange weighting happens via
-		// lCoeffs, we apply the adjustment factor tweak/λ_self at signing time. For now
-		// we use a simpler scheme: signer with ID=1 holds the full tweak addend such that
-		// the reconstructed child secret = master_secret + tweak.
-		// We achieve this by adding tweak directly to the skShare of the lowest-ID signer
-		// and adjusting the VkShare accordingly.
-		selfPID := s.participantID(s.session.nodeID)
-		if selfPID == 1 {
-			skShare = skShare.Add(tweak)
-			vkShare = vkShare.Add(s.curve.ScalarBaseMult(tweak))
-		}
+		// Every participant adds tweak to their raw Shamir share so that the
+		// Lagrange reconstruction yields the child secret:
+		//   sum(L_i * (sk_i + tweak)) = secret + tweak * sum(L_i) = secret + tweak
+		// (Lagrange coefficients over the signing set always sum to 1.)
+		skShare = skShare.Add(tweak)
+		vkShare = vkShare.Add(s.curve.ScalarBaseMult(tweak))
 		vk = childVK
 	}
 
