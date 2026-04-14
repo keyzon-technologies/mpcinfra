@@ -4,15 +4,10 @@
 
 > _"Setting up MPC wallets has always been painful, complex, and confusing. With mpcinfra, you can launch a secure MPC node cluster and generate wallets in minutes."_
 
-<p><img title="fystack logo" src="https://avatars.githubusercontent.com/u/149689344?s=400&u=13bed818667eefccd78ca4b4207d088eeb4f6110&v=4" width="320" height="320"></p>
-<p><a href="https://t.me/+9AtC0z8sS79iZjFl">Join our Telegram community to discuss mpcinfra and Web3 cyber security!</a></p>
-
 [![Go Version](https://img.shields.io/badge/Go-v1.25+-00ADD8?logo=go&style=for-the-badge)](https://go.dev/)
 [![License](https://img.shields.io/github/license/fystack/mpcinfra?style=for-the-badge)](./LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/keyzon-technologies/mpcinfra?style=for-the-badge)](https://goreportcard.com/report/github.com/keyzon-technologies/mpcinfra)
 [![Version](https://img.shields.io/github/v/release/fystack/mpcinfra?label=version&logo=semantic-release&style=for-the-badge)](https://github.com/keyzon-technologies/mpcinfra/releases)
-[![Telegram](https://img.shields.io/badge/Telegram-Community%20-26A5E4?logo=telegram&style=for-the-badge)](https://t.me/+9AtC0z8sS79iZjFl)
-[![Made by Fystack](https://img.shields.io/badge/Made%20by-Fystack-7D3DF4?style=for-the-badge)](https://fystack.io)
 
 </div>
 
