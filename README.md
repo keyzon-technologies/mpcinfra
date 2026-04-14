@@ -24,8 +24,6 @@ At its cryptographic core, mpcinfra integrates tss-lib, a production-grade thres
 
 - **EdDSA (Ed25519)**: for Solana, Polkadot, Cardano, and other modern blockchains
 
-![mpcinfra Architecture](images/mpcinfra.png)
-
 ---
 
 ## Resources
