@@ -16,7 +16,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.33.5
 	github.com/joho/godotenv v1.5.1
-	github.com/keyzon-technologies/kryptology v1.0.6
+	github.com/keyzon-technologies/kryptology v1.0.7
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/nats-io/nats.go v1.49.0
 	github.com/rs/zerolog v1.34.0

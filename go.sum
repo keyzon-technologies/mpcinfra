@@ -197,8 +197,8 @@ github.com/json-iterator/go v1.1.10/go.mod h1:KdQUCv79m/52Kvf8AW2vK1V8akMuk1QjK/
 github.com/json-iterator/go v1.1.11/go.mod h1:KdQUCv79m/52Kvf8AW2vK1V8akMuk1QjK/uOdHXbAo4=
 github.com/julienschmidt/httprouter v1.2.0/go.mod h1:SYymIcj16QtmaHHD7aYtjjsJG7VTCxuUUipMqKk8s4w=
 github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
-github.com/keyzon-technologies/kryptology v1.0.6 h1:4GRgxq+27n3E7kUNu4YL8miyUbvgPUX4uK3Md8cw8es=
-github.com/keyzon-technologies/kryptology v1.0.6/go.mod h1:C41lTGjV8yXvxl7FT7zaNOViROzGoi/R4mZ4BBBMQDo=
+github.com/keyzon-technologies/kryptology v1.0.7 h1:BiknxUVu1cJ6n6aH7qD5zFFdVsAl4Ub1uxBTDFwAY1w=
+github.com/keyzon-technologies/kryptology v1.0.7/go.mod h1:B0/OmjD+Ux4keZS/SFbBx8SUPF4hT5kQaLtdyawcX98=
 github.com/kkdai/bstream v0.0.0-20161212061736-f391b8402d23/go.mod h1:J+Gs4SYgM6CZQHDETBtE9HaSEkGmuNXF86RwHhHUvq4=
 github.com/klauspost/compress v1.18.5 h1:/h1gH5Ce+VWNLSWqPzOVn6XBO+vJbCNGvjoaGBFW2IE=
 github.com/klauspost/compress v1.18.5/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
