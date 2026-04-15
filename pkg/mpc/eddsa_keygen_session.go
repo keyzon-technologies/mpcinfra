@@ -3,6 +3,7 @@ package mpc
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -133,15 +134,16 @@ func (s *eddsaKeygenSession) Init() {
 		}
 	}
 
-	if s.threshold < 0 {
-		s.sendErr(fmt.Errorf("EDDSA keygen: invalid threshold %d", s.threshold))
+	if s.threshold < 0 || s.threshold+1 > math.MaxUint32 {
+		s.sendErr(fmt.Errorf("EDDSA keygen: threshold %d out of uint32 range", s.threshold))
 		return
 	}
 
+	thresholdU32 := uint32(s.threshold + 1) // #nosec G115 -- bounds checked above
 	var err error
 	s.frostParticipant, err = frostdkg.NewDkgParticipant(
 		selfID,
-		uint32(s.threshold+1), // Feldman threshold = t+1
+		thresholdU32, // Feldman threshold = t+1
 		"eddsa-keygen-v1",
 		s.curve,
 		others...,

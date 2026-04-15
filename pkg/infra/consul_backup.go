@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/consul/api"
@@ -177,7 +178,8 @@ func StartPeriodicConsulBackup(ctx context.Context, exe *consulBackupExecutor, p
 
 // RestoreConsulBackup reads an encrypted backup file and restores all KV pairs into Consul.
 func RestoreConsulBackup(path string, kv ConsulKV, encryptionKey []byte) error {
-	fileBytes, err := os.ReadFile(path)
+	cleanPath := filepath.Clean(path)
+	fileBytes, err := os.ReadFile(cleanPath) // #nosec G304 -- path provided by caller/CLI
 	if err != nil {
 		return fmt.Errorf("consul restore: failed to read file: %w", err)
 	}

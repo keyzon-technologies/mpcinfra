@@ -3,6 +3,7 @@ package mpc
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -175,13 +176,24 @@ func (s *eddsaSigningSession) Init(tx *big.Int) error {
 
 	// Compute 1-indexed IDs and Lagrange coefficients for all session participants.
 	n := len(s.session.peerIDs)
+	if n <= 0 || n > math.MaxUint32 {
+		return fmt.Errorf("EDDSA sign: peer count %d out of uint32 range", n)
+	}
+	if kgData.Threshold < 0 || kgData.Threshold+1 > math.MaxUint32 {
+		return fmt.Errorf("EDDSA sign: threshold %d out of uint32 range", kgData.Threshold)
+	}
+	if len(kgData.NodeIDs) <= 0 || len(kgData.NodeIDs) > math.MaxUint32 {
+		return fmt.Errorf("EDDSA sign: node count %d out of uint32 range", len(kgData.NodeIDs))
+	}
 	signerIDs := make([]uint32, n)
 	for i := range s.session.peerIDs {
 		signerIDs[i] = uint32(i + 1)
 	}
 	s.signerIDs = signerIDs
 
-	sh, err := sharing.NewShamir(uint32(kgData.Threshold+1), uint32(len(kgData.NodeIDs)), s.curve)
+	threshold := uint32(kgData.Threshold + 1)  // #nosec G115 -- bounds checked above
+	nodeCount := uint32(len(kgData.NodeIDs)) // #nosec G115 -- bounds checked above
+	sh, err := sharing.NewShamir(threshold, nodeCount, s.curve)
 	if err != nil {
 		return fmt.Errorf("EDDSA sign: NewShamir: %w", err)
 	}
@@ -191,10 +203,11 @@ func (s *eddsaSigningSession) Init(tx *big.Int) error {
 	}
 	s.lCoeffs = lCoeffs
 
+	nU32 := uint32(n)
 	signer, err := frosted25519.NewSigner(
 		info,
 		selfPID,
-		uint32(n), // thresh = number of cosigners
+		nU32, // thresh = number of cosigners
 		lCoeffs,
 		signerIDs,
 		&frosted25519.Ed25519ChallengeDeriver{},

@@ -178,15 +178,16 @@ func (s *ecdsaKeygenSession) Init() {
 		}
 	}
 
-	if s.threshold < 0 {
-		s.sendErr(fmt.Errorf("ECDSA keygen: invalid threshold %d", s.threshold))
+	if s.threshold < 0 || s.threshold+1 > math.MaxUint32 {
+		s.sendErr(fmt.Errorf("ECDSA keygen: threshold %d out of uint32 range", s.threshold))
 		return
 	}
 
+	thresholdU32 := uint32(s.threshold + 1) // #nosec G115 -- bounds checked above
 	var err error
 	s.frostParticipant, err = frostdkg.NewDkgParticipant(
 		selfID,
-		uint32(s.threshold+1),      // Feldman threshold = t+1
+		thresholdU32,               // Feldman threshold = t+1
 		"mpcinfra-ecdsa-keygen-v1", // context string — domain-separates this DKG from other uses
 		s.curve,
 		others...,
@@ -400,13 +401,15 @@ func (s *ecdsaKeygenSession) startPairSetupPhase() {
 	selfID := s.selfID()
 	n := len(s.session.peerIDs)
 
-	if s.threshold < 0 || n > math.MaxUint32 {
+	if s.threshold < 0 || s.threshold+1 > math.MaxUint32 || n > math.MaxUint32 {
 		s.sendErr(fmt.Errorf("ECDSA keygen: threshold=%d or peer count=%d out of range", s.threshold, n))
 		return
 	}
 
 	// Compute Lagrange shamir wrapper (only needs curve, threshold/limit not used in LagrangeCoeffs).
-	sh, err := sharing.NewShamir(uint32(s.threshold+1), uint32(n), s.curve)
+	threshU32 := uint32(s.threshold + 1) // #nosec G115 -- bounds checked above
+	nU32 := uint32(n)                   // #nosec G115 -- bounds checked above
+	sh, err := sharing.NewShamir(threshU32, nU32, s.curve)
 	if err != nil {
 		s.sendErr(fmt.Errorf("ECDSA keygen: NewShamir for Lagrange: %w", err))
 		return

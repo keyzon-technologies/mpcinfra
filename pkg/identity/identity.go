@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -173,7 +174,7 @@ func NewFileStore(identityDir, nodeName string, decrypt bool, agePasswordFile st
 			return nil, fmt.Errorf("invalid identity file path for node %s: %w", nodeName, err)
 		}
 
-		data, err := os.ReadFile(identityFilePath)
+		data, err := os.ReadFile(filepath.Clean(identityFilePath)) // #nosec G304 -- path constructed via pathutil.SafePath
 		if err != nil {
 			return nil, fmt.Errorf(
 				"missing identity file for node %s (%s): %w",
@@ -365,7 +366,7 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		logger.Infof("Using age-encrypted private key for %s", nodeName)
 
 		// Open the encrypted file
-		encryptedFile, err := os.Open(encryptedKeyPath)
+		encryptedFile, err := os.Open(filepath.Clean(encryptedKeyPath)) // #nosec G304 -- path constructed via filepath.Join
 		if err != nil {
 			return "", fmt.Errorf("failed to open encrypted key file: %w", err)
 		}
@@ -374,7 +375,7 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		var passphrase string
 		if agePasswordFile != "" {
 			// Load passphrase from file
-			data, err := os.ReadFile(agePasswordFile)
+			data, err := os.ReadFile(filepath.Clean(agePasswordFile)) // #nosec G304 -- path provided by caller configuration
 			if err != nil {
 				return "", fmt.Errorf("failed to read age key file %s: %w", agePasswordFile, err)
 			}
@@ -423,7 +424,7 @@ func loadPrivateKey(identityDir, nodeName string, decrypt bool, agePasswordFile 
 		}
 
 		logger.Infof("Using unencrypted private key for %s", nodeName)
-		privateKeyData, err := os.ReadFile(unencryptedKeyPath)
+		privateKeyData, err := os.ReadFile(filepath.Clean(unencryptedKeyPath)) // #nosec G304 -- path constructed via filepath.Join
 		if err != nil {
 			return "", fmt.Errorf("failed to read private key file: %w", err)
 		}

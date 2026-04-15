@@ -167,7 +167,9 @@ func (b *badgerBackupExecutor) RestoreBackup(restorePath string, encryptionKey [
 	}
 
 	if err := restoreDB.Load(bytes.NewReader(plain), 10); err != nil {
-		restoreDB.Close()
+		if closeErr := restoreDB.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("failed to close restore database after load error")
+		}
 		return fmt.Errorf("failed to load backup data: %w", err)
 	}
 
@@ -201,7 +203,9 @@ func (b *badgerBackupExecutor) RestoreBackupFromBytes(restorePath string, fileBy
 	}
 
 	if err := restoreDB.Load(bytes.NewReader(plain), 10); err != nil {
-		restoreDB.Close()
+		if closeErr := restoreDB.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("failed to close restore database after load error")
+		}
 		return fmt.Errorf("failed to load backup data: %w", err)
 	}
 
@@ -214,9 +218,10 @@ func (b *badgerBackupExecutor) RestoreBackupFromBytes(restorePath string, fileBy
 }
 
 func (b *badgerBackupExecutor) decryptFile(path string) ([]byte, error) {
-	fileBytes, err := os.ReadFile(path)
+	cleanPath := filepath.Clean(path)
+	fileBytes, err := os.ReadFile(cleanPath) // #nosec G304 -- path is constructed internally via filepath.Join
 	if err != nil {
-		return nil, fmt.Errorf("failed to read backup file %s: %w", path, err)
+		return nil, fmt.Errorf("failed to read backup file %s: %w", cleanPath, err)
 	}
 	return decryptBackupBytes(fileBytes, b.BackupEncryptionKey)
 }

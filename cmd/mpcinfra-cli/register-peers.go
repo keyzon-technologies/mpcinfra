@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/keyzon-technologies/mpcinfra/pkg/common/pathutil"
@@ -40,7 +41,7 @@ func registerPeers(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Read peers JSON file
-	data, err := os.ReadFile(inputPath)
+	data, err := os.ReadFile(filepath.Clean(inputPath)) // #nosec G304 -- path validated by pathutil.ValidateFilePath
 	if err != nil {
 		return fmt.Errorf("failed to read JSON file: %w", err)
 	}

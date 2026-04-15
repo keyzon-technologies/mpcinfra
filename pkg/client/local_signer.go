@@ -81,7 +81,7 @@ func readKeyFile(keyPath string, encrypted bool, password string) ([]byte, error
 		}
 
 		// Read encrypted file
-		encryptedBytes, err := os.ReadFile(keyPath)
+		encryptedBytes, err := os.ReadFile(filepath.Clean(keyPath)) // #nosec G304 -- path validated by caller
 		if err != nil {
 			return nil, fmt.Errorf("failed to read encrypted key file: %w", err)
 		}
@@ -90,7 +90,7 @@ func readKeyFile(keyPath string, encrypted bool, password string) ([]byte, error
 		return decryptPrivateKey(encryptedBytes, password)
 	} else {
 		// Read unencrypted key
-		return os.ReadFile(keyPath)
+		return os.ReadFile(filepath.Clean(keyPath)) // #nosec G304 -- path validated by caller
 	}
 }
 

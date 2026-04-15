@@ -146,7 +146,7 @@ func generateInitiatorIdentity(ctx context.Context, c *cli.Command) error {
 			return fmt.Errorf("invalid encrypted key file path: %w", err)
 		}
 
-		outFile, err := os.Create(encKeyPath)
+		outFile, err := os.Create(filepath.Clean(encKeyPath)) // #nosec G304 -- path constructed from validated output dir
 		if err != nil {
 			return fmt.Errorf("failed to create encrypted private key file: %w", err)
 		}

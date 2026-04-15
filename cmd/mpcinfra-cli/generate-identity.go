@@ -99,7 +99,7 @@ func generateIdentity(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Read peers file
-	peersData, err := os.ReadFile(peersPath)
+	peersData, err := os.ReadFile(filepath.Clean(peersPath)) // #nosec G304 -- path validated by pathutil.ValidateFilePath
 	if err != nil {
 		return fmt.Errorf("failed to read peers file: %w", err)
 	}
@@ -180,7 +180,7 @@ func generateNodeIdentity(nodeName, nodeID, identityDir string, encrypt bool, pa
 		}
 
 		// Encrypt with age and passphrase
-		outFile, err := os.Create(encryptedKeyPath)
+		outFile, err := os.Create(filepath.Clean(encryptedKeyPath)) // #nosec G304 -- path constructed from validated output dir
 		if err != nil {
 			return fmt.Errorf("failed to create encrypted private key file: %w", err)
 		}

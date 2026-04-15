@@ -405,7 +405,7 @@ func runNode(ctx context.Context, c *cli.Command) error {
 
 // loadPasswordFromFile reads the BadgerDB password from a file
 func loadPasswordFromFile(filePath string) error {
-	passwordBytes, err := os.ReadFile(filePath)
+	passwordBytes, err := os.ReadFile(filepath.Clean(filePath)) // #nosec G304 -- CLI-provided path
 	if err != nil {
 		return fmt.Errorf("failed to read password file %s: %w", filePath, err)
 	}

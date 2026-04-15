@@ -206,11 +206,13 @@ func (s *eddsaReshareSession) runOldMemberProtocol() {
 
 	// Create Feldman polynomial g_i of degree t' with g_i(0) = skShare.
 	nNew := len(s.newPeerIDs)
-	if s.newThreshold < 0 || nNew > math.MaxUint32 {
+	if s.newThreshold < 0 || s.newThreshold+1 > math.MaxUint32 || nNew > math.MaxUint32 {
 		s.sendErr(fmt.Errorf("EDDSA reshare: newThreshold=%d or new peer count=%d out of range", s.newThreshold, nNew))
 		return
 	}
-	feldman, err := sharing.NewFeldman(uint32(s.newThreshold+1), uint32(nNew), s.curve)
+	newThreshU32 := uint32(s.newThreshold + 1) // #nosec G115 -- bounds checked above
+	nNewU32 := uint32(nNew)                   // #nosec G115 -- bounds checked above
+	feldman, err := sharing.NewFeldman(newThreshU32, nNewU32, s.curve)
 	if err != nil {
 		s.sendErr(fmt.Errorf("EDDSA reshare: NewFeldman: %w", err))
 		return
@@ -373,7 +375,7 @@ func (s *eddsaReshareSession) computeNewShare() {
 
 	// Compute Lagrange coefficients for the old committee.
 	nOld := len(s.oldPeerIDs)
-	if s.oldThreshold < 0 || nOld > math.MaxUint32 {
+	if s.oldThreshold < 0 || s.oldThreshold+1 > math.MaxUint32 || nOld > math.MaxUint32 {
 		s.sendErr(fmt.Errorf("EDDSA reshare: oldThreshold=%d or old peer count=%d out of range", s.oldThreshold, nOld))
 		return
 	}
@@ -381,7 +383,9 @@ func (s *eddsaReshareSession) computeNewShare() {
 	for i := range s.oldPeerIDs {
 		oldIDs[i] = uint32(i + 1)
 	}
-	sh, err := sharing.NewShamir(uint32(s.oldThreshold+1), uint32(nOld), s.curve)
+	oldThreshU32 := uint32(s.oldThreshold + 1) // #nosec G115 -- bounds checked above
+	nOldU32 := uint32(nOld)                   // #nosec G115 -- bounds checked above
+	sh, err := sharing.NewShamir(oldThreshU32, nOldU32, s.curve)
 	if err != nil {
 		s.sendErr(fmt.Errorf("EDDSA reshare: NewShamir: %w", err))
 		return

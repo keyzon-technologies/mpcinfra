@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/hashicorp/consul/api"
 )
@@ -37,7 +38,7 @@ func LoadPeersFromConsul(kv *api.KV, prefix string) ([]Peer, error) {
 
 // LoadPeersFromFile loads peers from a JSON file (map[string]string: name -> ID)
 func LoadPeersFromFile(path string) ([]Peer, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304 -- path provided by caller/CLI
 	if err != nil {
 		return nil, fmt.Errorf("failed to read peers file: %w", err)
 	}

@@ -890,7 +890,7 @@ func writeBenchmarkToFile(content, outputFile, operationType string) (err error)
 	}
 
 	// Open file for appending (create if doesn't exist)
-	file, err := os.OpenFile(outputFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(filepath.Clean(outputFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600) // #nosec G304 -- CLI-provided output path
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
