@@ -13,6 +13,7 @@ package mpc
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -205,6 +206,10 @@ func (s *eddsaReshareSession) runOldMemberProtocol() {
 
 	// Create Feldman polynomial g_i of degree t' with g_i(0) = skShare.
 	nNew := len(s.newPeerIDs)
+	if s.newThreshold < 0 || nNew > math.MaxUint32 {
+		s.sendErr(fmt.Errorf("EDDSA reshare: newThreshold=%d or new peer count=%d out of range", s.newThreshold, nNew))
+		return
+	}
 	feldman, err := sharing.NewFeldman(uint32(s.newThreshold+1), uint32(nNew), s.curve)
 	if err != nil {
 		s.sendErr(fmt.Errorf("EDDSA reshare: NewFeldman: %w", err))
@@ -368,6 +373,10 @@ func (s *eddsaReshareSession) computeNewShare() {
 
 	// Compute Lagrange coefficients for the old committee.
 	nOld := len(s.oldPeerIDs)
+	if s.oldThreshold < 0 || nOld > math.MaxUint32 {
+		s.sendErr(fmt.Errorf("EDDSA reshare: oldThreshold=%d or old peer count=%d out of range", s.oldThreshold, nOld))
+		return
+	}
 	oldIDs := make([]uint32, nOld)
 	for i := range s.oldPeerIDs {
 		oldIDs[i] = uint32(i + 1)

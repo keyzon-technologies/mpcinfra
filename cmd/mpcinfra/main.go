@@ -328,7 +328,7 @@ func runNode(ctx context.Context, c *cli.Command) error {
 
 		// Shutdown health check server if it was started
 		if healthServer != nil {
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(appContext), 5*time.Second)
 			defer shutdownCancel()
 			if err := healthServer.Shutdown(shutdownCtx); err != nil {
 				logger.Error("Failed to shutdown health check server", err)

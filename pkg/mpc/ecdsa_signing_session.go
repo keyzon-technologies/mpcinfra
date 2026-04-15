@@ -3,6 +3,7 @@ package mpc
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/keyzon-technologies/kryptology/pkg/core/curves"
@@ -274,6 +275,10 @@ func (s *ecdsaSigningSession) finishSign() {
 	sig, err := dklsv2.DecodeSignature(resultMsg)
 	if err != nil {
 		s.sendErr(fmt.Errorf("ECDSA sign: decode signature: %w", err))
+		return
+	}
+	if sig.V < 0 || sig.V > math.MaxUint8 {
+		s.sendErr(fmt.Errorf("ECDSA sign: recovery value %d out of byte range", sig.V))
 		return
 	}
 

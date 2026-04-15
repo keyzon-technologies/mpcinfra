@@ -133,6 +133,11 @@ func (s *eddsaKeygenSession) Init() {
 		}
 	}
 
+	if s.threshold < 0 {
+		s.sendErr(fmt.Errorf("EDDSA keygen: invalid threshold %d", s.threshold))
+		return
+	}
+
 	var err error
 	s.frostParticipant, err = frostdkg.NewDkgParticipant(
 		selfID,

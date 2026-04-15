@@ -3,6 +3,7 @@ package mpc
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -175,6 +176,11 @@ func (s *ecdsaKeygenSession) Init() {
 		if id != s.session.nodeID {
 			others = append(others, uint32(i+1))
 		}
+	}
+
+	if s.threshold < 0 {
+		s.sendErr(fmt.Errorf("ECDSA keygen: invalid threshold %d", s.threshold))
+		return
 	}
 
 	var err error
@@ -393,6 +399,11 @@ func (s *ecdsaKeygenSession) startPairSetupPhase() {
 
 	selfID := s.selfID()
 	n := len(s.session.peerIDs)
+
+	if s.threshold < 0 || n > math.MaxUint32 {
+		s.sendErr(fmt.Errorf("ECDSA keygen: threshold=%d or peer count=%d out of range", s.threshold, n))
+		return
+	}
 
 	// Compute Lagrange shamir wrapper (only needs curve, threshold/limit not used in LagrangeCoeffs).
 	sh, err := sharing.NewShamir(uint32(s.threshold+1), uint32(n), s.curve)
