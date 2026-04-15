@@ -1,7 +1,6 @@
 package mpc
 
 import (
-	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"strings"
@@ -356,40 +355,6 @@ func (s *session) ErrChan() <-chan error {
 
 func (s *session) GetVersion() int {
 	return s.version
-}
-
-// loadOldShareDataGeneric loads share data from kvstore with backward-compatible versioned key fallback.
-func (s *session) loadOldShareDataGeneric(walletID string, version int, dest any) error {
-	var (
-		key     string
-		keyData []byte
-		err     error
-	)
-
-	if version > 0 {
-		key = s.composeKey(walletIDWithVersion(walletID, version))
-		keyData, err = s.kvstore.Get(key)
-		if err != nil {
-			return err
-		}
-	}
-
-	if version == 0 {
-		key = s.composeKey(walletID)
-		keyData, err = s.kvstore.Get(key)
-		if err != nil {
-			return err
-		}
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to get wallet data from KVStore (key=%s): %w", key, err)
-	}
-
-	if err := json.Unmarshal(keyData, dest); err != nil {
-		return fmt.Errorf("failed to unmarshal wallet data: %w", err)
-	}
-	return nil
 }
 
 func walletIDWithVersion(walletID string, version int) string {

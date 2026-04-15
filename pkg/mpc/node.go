@@ -378,24 +378,6 @@ func (p *Node) Close() {
 	}
 }
 
-func (p *Node) getVersion(sessionType SessionType, walletID string) int {
-	var composeKey string
-	switch sessionType {
-	case SessionTypeECDSA:
-		composeKey = fmt.Sprintf("ecdsa:%s", walletID)
-	case SessionTypeEDDSA:
-		composeKey = fmt.Sprintf("eddsa:%s", walletID)
-	default:
-		logger.Fatal("Unknown session type", errors.New("Unknown session type"))
-	}
-	ki, err := p.keyinfoStore.Get(composeKey)
-	if err != nil {
-		logger.Error("Get keyinfo failed", err, "walletID", walletID)
-		return DefaultVersion
-	}
-	return ki.Version
-}
-
 func sessionKeyPrefix(sessionType SessionType) (string, error) {
 	switch sessionType {
 	case SessionTypeECDSA:

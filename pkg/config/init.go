@@ -98,6 +98,12 @@ type TLSConfig struct {
 	CAB64         string `mapstructure:"ca_b64"`
 }
 
+func mustBindEnv(key string, envKeys ...string) {
+	if err := viper.BindEnv(append([]string{key}, envKeys...)...); err != nil {
+		log.Fatalf("failed to bind env key %q: %v", key, err)
+	}
+}
+
 func InitViperConfig() {
 	err := godotenv.Load()
 	if err != nil {
@@ -107,32 +113,32 @@ func InitViperConfig() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
-	viper.BindEnv("environment", "ENVIRONMENT")
+	mustBindEnv("environment", "ENVIRONMENT")
 
-	viper.BindEnv("badger_password", "BADGER_PASSWORD")
-	viper.BindEnv("badger_backup_password", "BADGER_BACKUP_PASSWORD")
+	mustBindEnv("badger_password", "BADGER_PASSWORD")
+	mustBindEnv("badger_backup_password", "BADGER_BACKUP_PASSWORD")
 
-	viper.BindEnv("chain_code", "CHAIN_CODE")
+	mustBindEnv("chain_code", "CHAIN_CODE")
 
-	viper.BindEnv("consul_backup_password", "CONSUL_BACKUP_PASSWORD")
-	viper.BindEnv("consul.address", "CONSUL_ADDRESS")
-	viper.BindEnv("consul.token", "CONSUL_TOKEN")
-	viper.BindEnv("consul.tls.client_cert_b64", "CONSUL_CLIENT_CERT")
-	viper.BindEnv("consul.tls.client_key_b64", "CONSUL_CLIENT_KEY")
-	viper.BindEnv("consul.tls.ca_b64", "TLS_CA")
+	mustBindEnv("consul_backup_password", "CONSUL_BACKUP_PASSWORD")
+	mustBindEnv("consul.address", "CONSUL_ADDRESS")
+	mustBindEnv("consul.token", "CONSUL_TOKEN")
+	mustBindEnv("consul.tls.client_cert_b64", "CONSUL_CLIENT_CERT")
+	mustBindEnv("consul.tls.client_key_b64", "CONSUL_CLIENT_KEY")
+	mustBindEnv("consul.tls.ca_b64", "TLS_CA")
 
-	viper.BindEnv("nats.url", "NATS_URL")
-	viper.BindEnv("nats.username", "NATS_USERNAME")
-	viper.BindEnv("nats.password", "NATS_PASSWORD")
-	viper.BindEnv("nats.tls.client_cert_b64", "NATS_CLIENT_CERT")
-	viper.BindEnv("nats.tls.client_key_b64", "NATS_CLIENT_KEY")
-	viper.BindEnv("nats.tls.ca_b64", "TLS_CA")
+	mustBindEnv("nats.url", "NATS_URL")
+	mustBindEnv("nats.username", "NATS_USERNAME")
+	mustBindEnv("nats.password", "NATS_PASSWORD")
+	mustBindEnv("nats.tls.client_cert_b64", "NATS_CLIENT_CERT")
+	mustBindEnv("nats.tls.client_key_b64", "NATS_CLIENT_KEY")
+	mustBindEnv("nats.tls.ca_b64", "TLS_CA")
 
-	viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
-	viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
-	viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
-	viper.BindEnv("r2.bucket", "R2_BUCKET")
-	viper.BindEnv("r2.prefix", "R2_PREFIX")
+	mustBindEnv("r2.account_id", "R2_ACCOUNT_ID")
+	mustBindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
+	mustBindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
+	mustBindEnv("r2.bucket", "R2_BUCKET")
+	mustBindEnv("r2.prefix", "R2_PREFIX")
 
 	log.Println("Initialized config from environment variables")
 }

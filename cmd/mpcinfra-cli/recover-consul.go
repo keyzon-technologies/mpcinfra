@@ -87,7 +87,9 @@ func recoverConsul(ctx context.Context, c *cli.Command) error {
 	if !force {
 		fmt.Printf("This will overwrite existing Consul KV data. Continue? [y/N]: ")
 		var answer string
-		fmt.Scanln(&answer)
+		if _, err := fmt.Scanln(&answer); err != nil {
+			answer = ""
+		}
 		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
 			fmt.Println("Aborted.")
 			return nil

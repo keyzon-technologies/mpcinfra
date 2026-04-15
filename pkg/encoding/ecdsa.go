@@ -59,7 +59,7 @@ func DecodeECDSAPubKey(encodedKey []byte) (*ecdsa.PublicKey, error) {
 	y := new(big.Int).SetBytes(encodedKey[32:])
 
 	curve := btcec.S256()
-	if !curve.IsOnCurve(x, y) {
+	if !curve.IsOnCurve(x, y) { //nolint:staticcheck
 		return nil, errors.New("invalid public key: point not on secp256k1 curve")
 	}
 

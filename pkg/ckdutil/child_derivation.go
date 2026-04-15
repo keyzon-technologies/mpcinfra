@@ -88,7 +88,6 @@ func DeriveSecp256k1ChildCompressed(masterPubKey []byte, chainCodeHex string, pa
 		return nil, fmt.Errorf("invalid master pubkey length: %d", len(masterPubKey))
 	}
 
-	curve := btcec.S256()
 	pubKey, err := btcec.ParsePubKey(masterPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("decode master pubkey: %w", err)
@@ -102,8 +101,8 @@ func DeriveSecp256k1ChildCompressed(masterPubKey []byte, chainCodeHex string, pa
 		return nil, fmt.Errorf("invalid chain code length: %d", len(chainCode))
 	}
 
-	currentX := new(big.Int).Set(pubKey.X())
-	currentY := new(big.Int).Set(pubKey.Y())
+	var currentPoint btcec.JacobianPoint
+	pubKey.AsJacobian(&currentPoint)
 	currentChainCode := append([]byte(nil), chainCode...)
 
 	for _, index := range path {
@@ -111,8 +110,11 @@ func DeriveSecp256k1ChildCompressed(masterPubKey []byte, chainCodeHex string, pa
 			return nil, fmt.Errorf("hardened derivation not supported: %d", index)
 		}
 
+		currentPoint.ToAffine()
+		currentPubKey := btcec.NewPublicKey(&currentPoint.X, &currentPoint.Y)
+
 		data := make([]byte, pubKeyBytesLenCompressed+childIndexBytes)
-		copy(data, serializeCompressed(currentX, currentY))
+		copy(data, currentPubKey.SerializeCompressed())
 		binary.BigEndian.PutUint32(data[pubKeyBytesLenCompressed:], index)
 
 		mac := hmac.New(sha512.New, currentChainCode)
@@ -121,22 +123,29 @@ func DeriveSecp256k1ChildCompressed(masterPubKey []byte, chainCodeHex string, pa
 		il := ilr[:32]
 		ir := ilr[32:]
 
-		ilNum := new(big.Int).SetBytes(il)
-		if ilNum.Sign() == 0 || ilNum.Cmp(curve.Params().N) >= 0 {
+		var ilScalar btcec.ModNScalar
+		if overflow := ilScalar.SetByteSlice(il); overflow || ilScalar.IsZero() {
 			return nil, fmt.Errorf("invalid IL for index %d", index)
 		}
 
-		deltaX, deltaY := curve.ScalarBaseMult(ilNum.Bytes())
-		childX, childY := curve.Add(currentX, currentY, deltaX, deltaY)
-		if childX == nil || childY == nil || childX.Sign() == 0 || childY.Sign() == 0 {
+		var deltaPoint btcec.JacobianPoint
+		btcec.ScalarBaseMultNonConst(&ilScalar, &deltaPoint)
+
+		var childPoint btcec.JacobianPoint
+		btcec.AddNonConst(&currentPoint, &deltaPoint, &childPoint)
+		childPoint.ToAffine()
+
+		if childPoint.X.IsZero() && childPoint.Y.IsZero() {
 			return nil, fmt.Errorf("invalid child point at index %d", index)
 		}
 
-		currentX, currentY = childX, childY
+		currentPoint = childPoint
 		currentChainCode = ir
 	}
 
-	return serializeCompressed(currentX, currentY), nil
+	currentPoint.ToAffine()
+	result := btcec.NewPublicKey(&currentPoint.X, &currentPoint.Y)
+	return result.SerializeCompressed(), nil
 }
 
 // --- shared helpers ---

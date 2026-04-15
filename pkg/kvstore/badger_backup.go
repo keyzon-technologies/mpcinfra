@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -257,49 +256,4 @@ func decryptBackupBytes(fileBytes []byte, key []byte) ([]byte, error) {
 	}
 
 	return plain, nil
-}
-
-// loadEncryptedBackup kept for internal use
-func (b *badgerBackupExecutor) loadEncryptedBackup(db *badger.DB, path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	magicBuf := make([]byte, len(magic))
-	if _, err := io.ReadFull(f, magicBuf); err != nil {
-		return err
-	}
-	if string(magicBuf) != magic {
-		return fmt.Errorf("bad magic")
-	}
-
-	var metaLen uint32
-	if err := binary.Read(f, binary.BigEndian, &metaLen); err != nil {
-		return err
-	}
-	metaBuf := make([]byte, metaLen)
-	if _, err := io.ReadFull(f, metaBuf); err != nil {
-		return err
-	}
-	var meta BadgerBackupMeta
-	if err := json.Unmarshal(metaBuf, &meta); err != nil {
-		return err
-	}
-
-	ct, err := io.ReadAll(f)
-	if err != nil {
-		return err
-	}
-
-	nonce, err := base64.StdEncoding.DecodeString(meta.NonceB64)
-	if err != nil {
-		return err
-	}
-	plain, err := encryption.DecryptAESGCM(ct, b.BackupEncryptionKey, nonce)
-	if err != nil {
-		return err
-	}
-	return db.Load(bytes.NewReader(plain), 10)
 }
