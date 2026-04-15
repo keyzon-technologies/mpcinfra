@@ -45,7 +45,10 @@ func (r *R2Config) IsEnabled() bool {
 // Implement masking serializer AppConfig
 func (c AppConfig) MarshalJSONMask() string {
 	// clone app config
+	c.BadgerPassword = strings.Repeat("*", len(c.BadgerPassword))
 	c.BadgerBackupPassword = strings.Repeat("*", len(c.BadgerBackupPassword))
+	c.ConsulBackupPassword = strings.Repeat("*", len(c.ConsulBackupPassword))
+	c.Consul.Password = strings.Repeat("*", len(c.Consul.Password))
 	c.Consul.Token = strings.Repeat("*", len(c.Consul.Token))
 	if c.Consul.TLS != nil {
 		consulTLSCopy := *c.Consul.TLS
