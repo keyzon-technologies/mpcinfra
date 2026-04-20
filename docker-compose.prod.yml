@@ -44,7 +44,7 @@ services:
       retries: 3
 
   consul:
-    image: consul:1.15.4
+    image: hashicorp/consul:1.22
     container_name: consul-prod
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -55,9 +55,21 @@ services:
         echo "$$CONSUL_TLS_CA"   | base64 -d > /tmp/certs/rootCA.pem
         exec consul agent -config-file=/etc/consul/consul.hcl
     environment:
-      - CONSUL_TLS_CERT
-      - CONSUL_TLS_KEY
-      - CONSUL_TLS_CA
+      CONSUL_TLS_CERT:
+      CONSUL_TLS_KEY:
+      CONSUL_TLS_CA:
+      CONSUL_TOKEN:
+      CONSUL_LOCAL_CONFIG: |
+        {
+          "acl": {
+            "enabled": true,
+            "default_policy": "deny",
+            "enable_token_persistence": true,
+            "tokens": {
+              "initial_management": "${CONSUL_TOKEN}"
+            }
+          }
+        }
     ports:
       - "8501:8501"   # HTTPS
     volumes:

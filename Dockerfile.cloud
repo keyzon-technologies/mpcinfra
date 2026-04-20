@@ -1,0 +1,19 @@
+FROM golang:1.26.2 AS builder
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+  go build -o /out/mpcinfra ./cmd/mpcinfra
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates coreutils && adduser -D -u 10001 app
+WORKDIR /app
+COPY --from=builder /out/mpcinfra /app/mpcinfra
+COPY deployments/railway/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && chown -R app:app /app
+USER app
+ENTRYPOINT ["/app/entrypoint.sh"]
